@@ -1,1 +1,104 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-unsigned-ipa:
+    name: Build unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 90
+
+    env:
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      SCHEME: VLC-iOS-no-watch
+      CONFIGURATION: Release
+      DERIVED_DATA_PATH: ${{ github.workspace }}/build/DerivedData
+      SOURCE_PACKAGES_PATH: ${{ github.workspace }}/build/SourcePackages
+      OUTPUT_PATH: ${{ github.workspace }}/build/output
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Show build environment
+        run: |
+          set -euo pipefail
+          sw_vers
+          xcodebuild -version
+          pod --version
+
+      - name: Install CocoaPods dependencies
+        run: |
+          set -euo pipefail
+          pod install --repo-update
+
+      - name: Resolve Swift packages
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -resolvePackageDependencies \
+            -workspace VLC.xcworkspace \
+            -scheme "$SCHEME" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_PATH"
+
+      - name: Build iPhoneOS app without signing
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace VLC.xcworkspace \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_PATH" \
+            -onlyUsePackageVersionsFromResolvedFile \
+            clean build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+
+          app_path="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION-iphoneos/VLC-iOS-no-watch.app"
+          if [[ ! -d "$app_path" ]]; then
+            echo "Expected app was not produced: $app_path" >&2
+            find "$DERIVED_DATA_PATH/Build/Products" -maxdepth 3 -name '*.app' -print || true
+            exit 1
+          fi
+
+          package_root="$(mktemp -d)"
+          mkdir -p "$package_root/Payload" "$OUTPUT_PATH"
+          ditto "$app_path" "$package_root/Payload/VLC-iOS-no-watch.app"
+
+          ipa_path="$OUTPUT_PATH/VLC-iOS-unsigned-${GITHUB_RUN_NUMBER}.ipa"
+          ditto -c -k --sequesterRsrc --keepParent "$package_root/Payload" "$ipa_path"
+          shasum -a 256 "$ipa_path" > "$ipa_path.sha256"
+
+          echo "IPA_PATH=$ipa_path" >> "$GITHUB_ENV"
+          ls -lh "$ipa_path" "$ipa_path.sha256"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: VLC-iOS-unsigned-ipa-${{ github.run_number }}
+          path: |
+            ${{ env.OUTPUT_PATH }}/*.ipa
+            ${{ env.OUTPUT_PATH }}/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
 

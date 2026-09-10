@@ -23,7 +23,9 @@
 #import "VLC-Swift.h"
 #import "VLCAppSceneDelegate.h"
 #import "VLCMLMedia+isWatched.h"
+#if (TARGET_OS_IOS || TARGET_OS_WATCH) && !NO_WATCH
 #import <WatchConnectivity/WatchConnectivity.h>
+#endif
 
 @interface VLCAppDelegate ()
 {
@@ -106,6 +108,7 @@
                                   kVLCPlayerIsRepeatEnabled: kVLCPlayerIsRepeatEnabledDefaultValue,
                                   kVLCSettingPlaybackSpeedDefaultValue: @(1.0),
                                   kVLCPlayerShowPlaybackSpeedShortcut: @(NO),
+                                  kVLCAudioPlayerArtworkDisplayMode: @(0),
                                   kVLCSettingAlwaysPlayURLs: @(NO),
                                   kVLCRestoreLastPlayedMedia: @(NO),
                                   kVLCSettingPlayerControlDuration: kVLCSettingPlayerControlDurationDefaultValue,
@@ -194,6 +197,10 @@
         sessionDelegate = [[VLCSessionDelegate alloc] init];
         [WCSession defaultSession].delegate = sessionDelegate;
         [[WCSession defaultSession] activateSession];
+
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+            [[[VLCAppCoordinator sharedInstance] transferController] observeOutstandingWatchTransfers];
+        });
     }
 #endif
 
@@ -273,6 +280,10 @@
     } else if(_isComingFromHandoff) {
         _isComingFromHandoff = NO;
     }
+
+#if TARGET_OS_IOS
+    [self.window.rootViewController setNeedsStatusBarAppearanceUpdate];
+#endif
 }
 
 - (void)applicationWillTerminate:(UIApplication *)application

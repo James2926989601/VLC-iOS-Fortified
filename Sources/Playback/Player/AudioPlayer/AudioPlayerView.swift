@@ -22,6 +22,7 @@ enum AudioPlayerArtworkDisplayMode: Int, CaseIterable {
 
     static var displayTitle: String {
         return localizedText(key: "AUDIO_PLAYER_DISPLAY",
+                             localized: NSLocalizedString("AUDIO_PLAYER_DISPLAY", comment: ""),
                              english: "Display",
                              simplifiedChinese: "显示",
                              traditionalChinese: "顯示")
@@ -29,6 +30,7 @@ enum AudioPlayerArtworkDisplayMode: Int, CaseIterable {
 
     static var displayAccessibilityHint: String {
         return localizedText(key: "AUDIO_PLAYER_DISPLAY_HINT",
+                             localized: NSLocalizedString("AUDIO_PLAYER_DISPLAY_HINT", comment: ""),
                              english: "Select how album artwork appears",
                              simplifiedChinese: "选择专辑封面的呈现方式",
                              traditionalChinese: "選擇專輯封面的呈現方式")
@@ -38,11 +40,13 @@ enum AudioPlayerArtworkDisplayMode: Int, CaseIterable {
         switch self {
         case .staticArtwork:
             return Self.localizedText(key: "AUDIO_PLAYER_STATIC_ARTWORK",
+                                      localized: NSLocalizedString("AUDIO_PLAYER_STATIC_ARTWORK", comment: ""),
                                       english: "Static Artwork",
                                       simplifiedChinese: "静态封面",
                                       traditionalChinese: "靜態封面")
         case .rotatingDisc:
             return Self.localizedText(key: "AUDIO_PLAYER_ROTATING_DISC",
+                                      localized: NSLocalizedString("AUDIO_PLAYER_ROTATING_DISC", comment: ""),
                                       english: "Rotating Disc",
                                       simplifiedChinese: "旋转碟片",
                                       traditionalChinese: "旋轉碟片")
@@ -54,6 +58,7 @@ enum AudioPlayerArtworkDisplayMode: Int, CaseIterable {
     }
 
     private static func localizedText(key: String,
+                                      localized: String,
                                       english: String,
                                       simplifiedChinese: String,
                                       traditionalChinese: String) -> String {
@@ -64,9 +69,9 @@ enum AudioPlayerArtworkDisplayMode: Int, CaseIterable {
         } else if localization.hasPrefix("zh-Hant") {
             fallback = traditionalChinese
         } else {
-            fallback = english
+            fallback = localized == key ? english : localized
         }
-        return NSLocalizedString(key, value: fallback, comment: "")
+        return fallback
     }
 }
 

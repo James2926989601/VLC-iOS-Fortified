@@ -11,6 +11,65 @@
 
 import UIKit
 
+enum AudioPlayerArtworkDisplayMode: Int, CaseIterable {
+    case staticArtwork
+    case rotatingDisc
+
+    static var current: AudioPlayerArtworkDisplayMode {
+        let storedValue = UserDefaults.standard.integer(forKey: kVLCAudioPlayerArtworkDisplayMode)
+        return AudioPlayerArtworkDisplayMode(rawValue: storedValue) ?? .staticArtwork
+    }
+
+    static var displayTitle: String {
+        return localizedText(key: "AUDIO_PLAYER_DISPLAY",
+                             english: "Display",
+                             simplifiedChinese: "显示",
+                             traditionalChinese: "顯示")
+    }
+
+    static var displayAccessibilityHint: String {
+        return localizedText(key: "AUDIO_PLAYER_DISPLAY_HINT",
+                             english: "Select how album artwork appears",
+                             simplifiedChinese: "选择专辑封面的呈现方式",
+                             traditionalChinese: "選擇專輯封面的呈現方式")
+    }
+
+    var title: String {
+        switch self {
+        case .staticArtwork:
+            return Self.localizedText(key: "AUDIO_PLAYER_STATIC_ARTWORK",
+                                      english: "Static Artwork",
+                                      simplifiedChinese: "静态封面",
+                                      traditionalChinese: "靜態封面")
+        case .rotatingDisc:
+            return Self.localizedText(key: "AUDIO_PLAYER_ROTATING_DISC",
+                                      english: "Rotating Disc",
+                                      simplifiedChinese: "旋转碟片",
+                                      traditionalChinese: "旋轉碟片")
+        }
+    }
+
+    func save() {
+        UserDefaults.standard.set(rawValue, forKey: kVLCAudioPlayerArtworkDisplayMode)
+    }
+
+    private static func localizedText(key: String,
+                                      english: String,
+                                      simplifiedChinese: String,
+                                      traditionalChinese: String) -> String {
+        let localization = Bundle.main.preferredLocalizations.first ?? "en"
+        let fallback: String
+        if localization.hasPrefix("zh-Hans") {
+            fallback = simplifiedChinese
+        } else if localization.hasPrefix("zh-Hant") {
+            fallback = traditionalChinese
+        } else {
+            fallback = english
+        }
+        return NSLocalizedString(key, value: fallback, comment: "")
+    }
+}
+
 protocol AudioPlayerViewDelegate: AnyObject {
     func audioPlayerViewDelegateGetThumbnail(_ audioPlayerView: AudioPlayerView) -> UIImage?
     func audioPlayerViewDelegateGetPlaybackSpeed(_ audioPlayerView: AudioPlayerView) -> Float
@@ -56,6 +115,20 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
         thumbnailImageView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         thumbnailImageView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         return thumbnailImageView
+    }()
+
+    private lazy var rotatingArtworkContainerView: UIView = {
+        let view = UIView()
+        view.isHidden = true
+        view.isUserInteractionEnabled = false
+        return view
+    }()
+
+    lazy var rotatingThumbnailImageView: UIImageView = {
+        let imageView = UIImageView()
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        return imageView
     }()
 
     private lazy var titleLabel: UILabel = {
@@ -240,6 +313,9 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
     }
 
     private let minimumThumbnailSize: CGFloat = 80.0
+    private let artworkRotationDuration: CFTimeInterval = 20.0
+    private let artworkRotationAnimationKey = "org.videolan.vlc.audio-player.artwork-rotation"
+    private var artworkDisplayMode = AudioPlayerArtworkDisplayMode.current
 
     private lazy var thumbnailViewCenterYConstraint: NSLayoutConstraint = {
         let constraint = thumbnailView.centerYAnchor.constraint(equalTo: safeAreaLayoutGuide.centerYAnchor)
@@ -278,6 +354,16 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
         setupLabels()
         NotificationCenter.default.addObserver(self, selector: #selector(themeDidChange),
                                                name: .VLCThemeDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(playbackDidStart),
+                                               name: Notification.Name(VLCPlaybackServicePlaybackDidStart), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(playbackDidPause),
+                                               name: Notification.Name(VLCPlaybackServicePlaybackDidPause), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(playbackDidResume),
+                                               name: Notification.Name(VLCPlaybackServicePlaybackDidResume), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(playbackDidStop),
+                                               name: Notification.Name(VLCPlaybackServicePlaybackDidStop), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(playbackDidMoveToNextItem(_:)),
+                                               name: Notification.Name(VLCPlaybackServicePlaybackDidMoveOnToNextItem), object: nil)
     }
 
     required init?(coder: NSCoder) {
@@ -313,8 +399,39 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
     }
 
     func updateThumbnailImageView() {
-        thumbnailImageView.image = delegate?.audioPlayerViewDelegateGetThumbnail(self)
+        let image = delegate?.audioPlayerViewDelegateGetThumbnail(self)
+        thumbnailImageView.image = image
+        rotatingThumbnailImageView.image = image
         thumbnailImageView.clipsToBounds = true
+    }
+
+    func updateArtworkPresentation(isPlaying: Bool, resetRotation: Bool = false) {
+        artworkDisplayMode = AudioPlayerArtworkDisplayMode.current
+
+        switch artworkDisplayMode {
+        case .staticArtwork:
+            thumbnailImageView.isHidden = false
+            rotatingArtworkContainerView.isHidden = true
+            resetArtworkRotation()
+        case .rotatingDisc:
+            thumbnailImageView.isHidden = true
+            rotatingArtworkContainerView.isHidden = false
+            updateRotatingArtworkCornerRadius()
+
+            if resetRotation {
+                resetArtworkRotation()
+            }
+
+            if isPlaying {
+                startOrResumeArtworkRotation()
+            } else {
+                pauseArtworkRotation()
+            }
+        }
+    }
+
+    var activeArtworkImageView: UIImageView {
+        return artworkDisplayMode == .rotatingDisc ? rotatingThumbnailImageView : thumbnailImageView
     }
     
     func setupPlaybackSpeed() {
@@ -408,6 +525,7 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
         super.layoutSubviews()
         updateContentInsets()
         updateAlbumLabelHeight()
+        updateRotatingArtworkCornerRadius()
     }
 
     private func updateContentInsets() {
@@ -481,23 +599,99 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
         return UIImage(named: fallback)
     }
 
-    func updatePlayButton(isPlaying: Bool) {
+    func updatePlayButton(isPlaying: Bool, resetArtworkRotation: Bool = false) {
         let icon = controlImage(symbol: isPlaying ? "pause.fill" : "play.fill",
                                 fallback: isPlaying ? "iconPause" : "iconPlay",
                                 pointSize: 26)
         playButton.setImage(icon, for: .normal)
         updateArtworkScale(isPlaying: isPlaying)
+        updateArtworkPresentation(isPlaying: isPlaying, resetRotation: resetArtworkRotation)
     }
 
     private func updateArtworkScale(isPlaying: Bool) {
         let targetTransform: CGAffineTransform = isPlaying ? .identity : CGAffineTransform(scaleX: 0.8, y: 0.8)
-        guard thumbnailImageView.transform != targetTransform else { return }
+        guard thumbnailImageView.transform != targetTransform ||
+                rotatingArtworkContainerView.transform != targetTransform else { return }
 
         UIView.animate(withDuration: 0.4, delay: 0,
                        usingSpringWithDamping: 0.7, initialSpringVelocity: 0.5,
                        options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.thumbnailImageView.transform = targetTransform
+            self.rotatingArtworkContainerView.transform = targetTransform
         }
+    }
+
+    private func updateRotatingArtworkCornerRadius() {
+        rotatingThumbnailImageView.layer.cornerRadius = min(rotatingThumbnailImageView.bounds.width,
+                                                             rotatingThumbnailImageView.bounds.height) / 2.0
+    }
+
+    private func startOrResumeArtworkRotation() {
+        let layer = rotatingThumbnailImageView.layer
+        if layer.animation(forKey: artworkRotationAnimationKey) == nil {
+            resetArtworkRotation()
+
+            let animation = CABasicAnimation(keyPath: "transform.rotation.z")
+            animation.fromValue = 0.0
+            animation.toValue = Double.pi * 2.0
+            animation.duration = artworkRotationDuration
+            animation.repeatCount = .infinity
+            animation.timingFunction = CAMediaTimingFunction(name: .linear)
+            layer.add(animation, forKey: artworkRotationAnimationKey)
+            return
+        }
+
+        guard layer.speed == 0.0 else {
+            return
+        }
+
+        let pausedTime = layer.timeOffset
+        layer.speed = 1.0
+        layer.timeOffset = 0.0
+        layer.beginTime = 0.0
+        layer.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) - pausedTime
+    }
+
+    private func pauseArtworkRotation() {
+        let layer = rotatingThumbnailImageView.layer
+        guard layer.animation(forKey: artworkRotationAnimationKey) != nil,
+              layer.speed != 0.0 else {
+            return
+        }
+
+        let pausedTime = layer.convertTime(CACurrentMediaTime(), from: nil)
+        layer.speed = 0.0
+        layer.timeOffset = pausedTime
+    }
+
+    private func resetArtworkRotation() {
+        let layer = rotatingThumbnailImageView.layer
+        layer.removeAnimation(forKey: artworkRotationAnimationKey)
+        layer.speed = 1.0
+        layer.timeOffset = 0.0
+        layer.beginTime = 0.0
+        layer.transform = CATransform3DIdentity
+    }
+
+    @objc private func playbackDidStart() {
+        updateArtworkPresentation(isPlaying: false, resetRotation: true)
+    }
+
+    @objc private func playbackDidPause() {
+        updateArtworkPresentation(isPlaying: false)
+    }
+
+    @objc private func playbackDidResume() {
+        updateArtworkPresentation(isPlaying: true)
+    }
+
+    @objc private func playbackDidStop() {
+        updateArtworkPresentation(isPlaying: false)
+    }
+
+    @objc private func playbackDidMoveToNextItem(_ notification: Notification) {
+        let isPlaying = (notification.object as? PlaybackService)?.isPlaying ?? false
+        updateArtworkPresentation(isPlaying: isPlaying, resetRotation: true)
     }
 
     func updateShuffleRepeatState(shuffleEnabled: Bool, repeatMode: VLCRepeatMode) {
@@ -746,11 +940,15 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
         let labelSpacing: CGFloat = 8.0
 
         thumbnailImageView.translatesAutoresizingMaskIntoConstraints = false
+        rotatingArtworkContainerView.translatesAutoresizingMaskIntoConstraints = false
+        rotatingThumbnailImageView.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         artistLabel.translatesAutoresizingMaskIntoConstraints = false
         albumLabel.translatesAutoresizingMaskIntoConstraints = false
 
         thumbnailView.addSubview(thumbnailImageView)
+        thumbnailView.addSubview(rotatingArtworkContainerView)
+        rotatingArtworkContainerView.addSubview(rotatingThumbnailImageView)
         addSubview(titleLabel)
         addSubview(artistLabel)
         addSubview(albumLabel)
@@ -795,6 +993,14 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
             albumLabel.topAnchor.constraint(equalTo: artistLabel.bottomAnchor, constant: labelSpacing),
             albumLabelHeightConstraint,
             minimumWidthConstraint,
+            rotatingArtworkContainerView.leadingAnchor.constraint(equalTo: thumbnailImageView.leadingAnchor),
+            rotatingArtworkContainerView.topAnchor.constraint(equalTo: thumbnailImageView.topAnchor),
+            rotatingArtworkContainerView.trailingAnchor.constraint(equalTo: thumbnailImageView.trailingAnchor),
+            rotatingArtworkContainerView.bottomAnchor.constraint(equalTo: thumbnailImageView.bottomAnchor),
+            rotatingThumbnailImageView.leadingAnchor.constraint(equalTo: rotatingArtworkContainerView.leadingAnchor),
+            rotatingThumbnailImageView.topAnchor.constraint(equalTo: rotatingArtworkContainerView.topAnchor),
+            rotatingThumbnailImageView.trailingAnchor.constraint(equalTo: rotatingArtworkContainerView.trailingAnchor),
+            rotatingThumbnailImageView.bottomAnchor.constraint(equalTo: rotatingArtworkContainerView.bottomAnchor),
         ])
 
         let thumbnailImageViewLeading = thumbnailImageView.leadingAnchor.constraint(greaterThanOrEqualTo: thumbnailView.leadingAnchor)

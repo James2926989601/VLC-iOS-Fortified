@@ -30,6 +30,7 @@ class AudioPlayerViewController: PlayerViewController {
     @objc weak var delegate: AudioPlayerViewControllerDelegate?
 
     private var isQueueHidden: Bool = true
+    private var artworkMediaIdentity: String?
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
         get { return UIInterfaceOrientationMask.allButUpsideDown }
@@ -353,10 +354,26 @@ class AudioPlayerViewController: PlayerViewController {
 
     private func updateNavigationBar(with title: String?) {
         mediaNavigationBar.setMediaTitleLabelText(title)
+        updateFavoriteButton()
+    }
+
+    private func updateArtworkMediaIdentity(with metadata: VLCMetaData) -> Bool {
+        let newIdentity: String
+        if let identifier = metadata.identifier {
+            newIdentity = "id:\(identifier.stringValue)"
+        } else {
+            newIdentity = [metadata.title ?? "",
+                           metadata.artist ?? "",
+                           metadata.albumName ?? ""].joined(separator: "\u{1F}")
+        }
+        let didChange = artworkMediaIdentity.map { $0 != newIdentity } ?? false
+        artworkMediaIdentity = newIdentity
+        return didChange
     }
 
     private func setPlayerInterfaceEnabled(_ enabled: Bool) {
         mediaNavigationBar.closePlaybackButton.isEnabled = enabled
+        mediaNavigationBar.favoriteButton.isEnabled = enabled
         mediaNavigationBar.queueButton.isEnabled = enabled
 #if os(iOS)
         mediaNavigationBar.deviceButton.isEnabled = enabled
@@ -464,10 +481,11 @@ extension AudioPlayerViewController: AudioPlayerViewDelegate {
 
 extension AudioPlayerViewController {
     func prepare(forMediaPlayback playbackService: PlaybackService) {
+        let metadata = playbackService.metadata
+        _ = updateArtworkMediaIdentity(with: metadata)
         audioPlayerView.updatePlayButton(isPlaying: playbackService.isPlaying)
         audioPlayerView.updateShuffleRepeatState(shuffleEnabled: playbackService.isShuffleMode, repeatMode: playbackService.repeatMode)
 
-        let metadata = playbackService.metadata
         audioPlayerView.updateLabels(title: metadata.title, artist: metadata.artist, album: metadata.albumName, isQueueHidden: isQueueHidden)
         updateNavigationBar(with: isQueueHidden ? nil : metadata.title)
         mediaScrubProgressBar.setLiveStream(metadata.isLiveStream && !playbackService.isSeekable)
@@ -488,7 +506,8 @@ extension AudioPlayerViewController {
                                       currentMediaHasChapters: currentMediaHasChapters,
                                       for: playbackService)
 
-        audioPlayerView.updatePlayButton(isPlaying: isPlaying)
+        audioPlayerView.updatePlayButton(isPlaying: isPlaying,
+                                         resetArtworkRotation: currentState == .opening)
         audioPlayerView.shouldEnableSeekButtons(playbackService.mediaList.count == 1)
 
         let image: UIImage? = isPlaying ? UIImage(named: "minimize") : UIImage(named: "close")
@@ -519,6 +538,8 @@ extension AudioPlayerViewController {
     }
 
     func displayMetadata(for playbackService: PlaybackService, metadata: VLCMetaData) {
+        let didChangeMedia = updateArtworkMediaIdentity(with: metadata)
+
         audioPlayerView.updateLabels(title: metadata.title, artist: metadata.artist, album: metadata.albumName, isQueueHidden: isQueueHidden)
         updateNavigationBar(with: isQueueHidden ? nil : metadata.title)
         mediaScrubProgressBar.setLiveStream(metadata.isLiveStream && !playbackService.isSeekable)
@@ -526,6 +547,11 @@ extension AudioPlayerViewController {
         if metadata.artworkImage != audioPlayerView.thumbnailImageView.image {
             audioPlayerView.updateThumbnailImageView()
             audioPlayerView.setupBackgroundColor()
+        }
+
+        if didChangeMedia {
+            audioPlayerView.updateArtworkPresentation(isPlaying: playbackService.isPlaying,
+                                                      resetRotation: true)
         }
     }
 
@@ -621,6 +647,11 @@ extension AudioPlayerViewController {
         setPlayerInterfaceEnabled(!state)
     }
 
+    func mediaMoreOptionsActionSheetDidChangeArtworkDisplayMode() {
+        audioPlayerView.updateArtworkPresentation(isPlaying: playbackService.isPlaying,
+                                                  resetRotation: true)
+    }
+
     override func mediaMoreOptionsActionSheetDisplayAddBookmarksView(_ bookmarksView: AddBookmarksView) {
         super.mediaMoreOptionsActionSheetDisplayAddBookmarksView(bookmarksView)
 
@@ -678,7 +709,7 @@ extension AudioPlayerViewController {
 
 extension AudioPlayerViewController: ZoomTransitionEndpoint {
     var zoomTransitionArtworkView: UIImageView? {
-        return audioPlayerView.thumbnailImageView
+        return audioPlayerView.activeArtworkImageView
     }
 }
 

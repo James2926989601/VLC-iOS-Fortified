@@ -24,6 +24,7 @@ enum ActionSheetCellIdentifier: String, CustomStringConvertible, CaseIterable {
     case interfaceLock
     case playNextItem
     case playlistPlayNextItem
+    case display
 
     var description: String {
         switch self {
@@ -51,6 +52,8 @@ enum ActionSheetCellIdentifier: String, CustomStringConvertible, CaseIterable {
             return NSLocalizedString("SETTINGS_PLAY_ALL", comment: "")
         case .playlistPlayNextItem:
             return NSLocalizedString("SETTINGS_PLAYLIST_PLAY_ALL", comment: "")
+        case .display:
+            return AudioPlayerArtworkDisplayMode.displayTitle
         }
     }
 
@@ -74,6 +77,8 @@ enum ActionSheetCellIdentifier: String, CustomStringConvertible, CaseIterable {
             return NSLocalizedString("SETTINGS_PLAY_ALL_HINT", comment: "")
         case .playlistPlayNextItem:
             return NSLocalizedString("SETTINGS_PLAYLIST_PLAY_ALL_HINT", comment: "")
+        case .display:
+            return AudioPlayerArtworkDisplayMode.displayAccessibilityHint
         default:
             return ""
         }
@@ -130,6 +135,8 @@ class MediaPlayerActionSheet: ActionSheet {
             return ActionSheetCellIdentifier.chapters.description
         } else if childView is BookmarksView {
             return ActionSheetCellIdentifier.bookmarks.description
+        } else if childView is AudioPlayerDisplayView {
+            return ActionSheetCellIdentifier.display.description
         } else {
             return getDefaultHeaderTitle()
         }

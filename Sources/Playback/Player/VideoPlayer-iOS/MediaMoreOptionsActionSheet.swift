@@ -35,6 +35,89 @@ protocol MediaMoreOptionsActionSheetDelegate {
     func mediaMoreOptionsActionSheetDidSelectAMark()
     func mediaMoreOptionsActionSheetDidSelectBMark()
     @objc optional func mediaMoreOptionsActionSheetShowPlaybackSpeedShortcut(_ displayView: Bool)
+    @objc optional func mediaMoreOptionsActionSheetDidChangeArtworkDisplayMode()
+}
+
+protocol AudioPlayerDisplayViewDelegate: AnyObject {
+    func audioPlayerDisplayViewDidChangeMode(_ view: AudioPlayerDisplayView)
+}
+
+final class AudioPlayerDisplayView: UIView, UITableViewDataSource, UITableViewDelegate {
+    weak var delegate: AudioPlayerDisplayViewDelegate?
+
+    private let reuseIdentifier = "AudioPlayerDisplayModeCell"
+
+    private lazy var tableView: UITableView = {
+        let tableView = UITableView(frame: .zero, style: .plain)
+        tableView.translatesAutoresizingMaskIntoConstraints = false
+        tableView.dataSource = self
+        tableView.delegate = self
+        tableView.rowHeight = 52.0
+        tableView.isScrollEnabled = false
+        tableView.tableFooterView = UIView()
+        return tableView
+    }()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupView()
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(setupTheme),
+                                               name: .VLCThemeDidChangeNotification,
+                                               object: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc func setupTheme() {
+        let colors = PresentationTheme.currentExcludingWhite.colors
+        backgroundColor = colors.background
+        tableView.backgroundColor = colors.background
+        tableView.separatorColor = colors.cellDetailTextColor.withAlphaComponent(0.35)
+        tableView.reloadData()
+    }
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return AudioPlayerArtworkDisplayMode.allCases.count
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: reuseIdentifier) ??
+            UITableViewCell(style: .default, reuseIdentifier: reuseIdentifier)
+        let mode = AudioPlayerArtworkDisplayMode.allCases[indexPath.row]
+        let colors = PresentationTheme.currentExcludingWhite.colors
+
+        cell.textLabel?.text = mode.title
+        cell.textLabel?.font = UIFont.preferredCustomFont(forTextStyle: .subheadline)
+        cell.textLabel?.textColor = colors.cellTextColor
+        cell.backgroundColor = colors.background
+        cell.tintColor = colors.orangeUI
+        cell.accessoryType = mode == AudioPlayerArtworkDisplayMode.current ? .checkmark : .none
+        cell.accessibilityLabel = mode.title
+        cell.accessibilityTraits = mode == AudioPlayerArtworkDisplayMode.current ? [.button, .selected] : .button
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let mode = AudioPlayerArtworkDisplayMode.allCases[indexPath.row]
+        mode.save()
+        tableView.deselectRow(at: indexPath, animated: false)
+        tableView.reloadData()
+        delegate?.audioPlayerDisplayViewDidChangeMode(self)
+    }
+
+    private func setupView() {
+        addSubview(tableView)
+        NSLayoutConstraint.activate([
+            tableView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            tableView.topAnchor.constraint(equalTo: topAnchor),
+            tableView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            tableView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        setupTheme()
+    }
 }
 
 @objc(VLCMediaMoreOptionsActionSheet)
@@ -147,6 +230,12 @@ protocol MediaMoreOptionsActionSheetDelegate {
         return abRepeatView
     }()
 
+    private lazy var displayView: AudioPlayerDisplayView = {
+        let displayView = AudioPlayerDisplayView(frame: offScreenFrame)
+        displayView.delegate = self
+        return displayView
+    }()
+
     // MARK: - Initializers
     override init() {
         super.init()
@@ -197,6 +286,7 @@ protocol MediaMoreOptionsActionSheetDelegate {
         equalizerView.setupTheme()
         chapterView.setupTheme()
         bookmarksView.setupTheme()
+        displayView.setupTheme()
     }
 
     func configureRepeatMode() -> (image: UIImage?, title: String, isEnabled: Bool) {
@@ -254,6 +344,8 @@ protocol MediaMoreOptionsActionSheetDelegate {
             openOptionView(bookmarksView)
         case .addBookmarks:
             openOptionView(addBookmarksView)
+        case .display:
+            openOptionView(displayView)
         default:
             openOptionView(mockView)
         }
@@ -265,6 +357,14 @@ protocol MediaMoreOptionsActionSheetDelegate {
 
     func renameBookmarkAt(name: String, row: Int) {
         bookmarksView.renameBookmarkAt(name: name, row: row)
+    }
+}
+
+// MARK: - AudioPlayerDisplayViewDelegate
+
+extension MediaMoreOptionsActionSheet: AudioPlayerDisplayViewDelegate {
+    func audioPlayerDisplayViewDidChangeMode(_ view: AudioPlayerDisplayView) {
+        moreOptionsDelegate?.mediaMoreOptionsActionSheetDidChangeArtworkDisplayMode?()
     }
 }
 
@@ -466,6 +566,8 @@ extension MediaMoreOptionsActionSheet: MediaPlayerActionSheetDataSource {
             return bookmarksView
         case .abRepeat:
             return abRepeatView
+        case .display:
+            return displayView
         default:
             return mockView
         }
@@ -491,6 +593,11 @@ extension MediaMoreOptionsActionSheet: MediaPlayerActionSheetDataSource {
                 return
             }
 
+            if $0 == .display && !isAudioPlayer {
+                // Album artwork presentation only belongs to the audio player.
+                return
+            }
+
             let cellModel = ActionSheetCellModel(
                 title: String(describing: $0),
                 imageIdentifier: $0.rawValue,
@@ -509,6 +616,10 @@ extension MediaMoreOptionsActionSheet: MediaPlayerActionSheetDataSource {
                 let repeatTuple = configureRepeatMode()
                 cellModel.iconImage = repeatTuple.image
                 cellModel.title = repeatTuple.title
+            } else if $0 == .display {
+                // Keep the icon column empty but present so this title aligns
+                // with the other Audio Options rows.
+                cellModel.iconImage = nil
             }
             models.append(cellModel)
         }

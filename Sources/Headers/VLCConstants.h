@@ -144,6 +144,7 @@
 #define kVLCRestoreLastPlayedMedia @"RestoreLastPlayedMedia"
 
 #define kVLCPlayerOpenInMiniPlayer @"OpenInMiniPlayer"
+#define kVLCPlayerExpectsAudioOnlyContent @"ExpectsAudioOnlyContent"
 #define kVLCPlayerShouldRememberState @"PlayerShouldRememberState"
 #define kVLCPlayerShouldRememberBrightness @"PlayerShouldRememberBrightness"
 #define KVLCPlayerBrightness @"playerbrightness"
@@ -152,6 +153,7 @@
 #define kVLCPlayerIsRepeatEnabled @"PlayerIsRepeatEnabled"
 #define kVLCPlayerIsRepeatEnabledDefaultValue @(0)
 #define kVLCPlayerShowPlaybackSpeedShortcut @"kVLCPlayerShowPlaybackSpeedShortcut"
+#define kVLCAudioPlayerArtworkDisplayMode @"AudioPlayerArtworkDisplayMode"
 
 #define kVLCCustomProfileEnabled @"kVLCCustomProfileEnabled"
 #define kVLCCustomEqualizerProfiles @"kVLCCustomEqualizerProfiles"
@@ -216,6 +218,7 @@
 #define kVLCMediaLibrarySyncID @"kVLCMediaLibrarySyncID"
 #define kVLCiPhoneMediaID @"kVLCiPhoneMediaID"
 #define kVLCiPhoneMediaFileName @"kVLCiPhoneMediaFileName"
+#define kVLCiPhoneMediaFileSize @"kVLCiPhoneMediaFileSize"
 
 #define kVLCiPhoneAlbumID @"kVLCiPhoneAlbumID"
 #define kVLCiPhoneAlbumName @"kVLCiPhoneAlbumName"
@@ -228,3 +231,5 @@
 
 #define kVLCMediaLibraryDBFileName @"medialibrary.db"
 #define kVLCSnapshotMediaLibraryDBFileName @"medialibrary-snapshot.db"
+
+#define kVLCFileTransferDidStartNotification @"kVLCFileTransferDidStartNotification"

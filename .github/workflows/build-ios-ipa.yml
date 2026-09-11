@@ -45,30 +45,50 @@ jobs:
           # Restore only absent upstream files. Never overwrite files from the fork.
           rsync -a --ignore-existing "$upstream_root/" "$GITHUB_WORKSPACE/"
 
-      - name: Verify required source files
+      - name: Verify all bridging-header imports
         run: |
           set -euo pipefail
 
-          required_files=(
-            'Sources/Network/Download/VLCArtworkCacher.h'
-            'Sources/Network/Download/VLCArtworkCacher.m'
-            'Sources/Network/Radio/VLCRadioService.h'
-            'Sources/Network/Radio/VLCRadioService.m'
-          )
-          missing_files=()
+          missing_imports=()
+          ambiguous_imports=()
+          checked_imports=0
 
-          for file in "${required_files[@]}"; do
-            if [[ ! -f "$file" ]]; then
-              missing_files+=("$file")
+          while IFS= read -r bridge; do
+            while IFS= read -r imported_header; do
+              [[ -z "$imported_header" ]] && continue
+              checked_imports=$((checked_imports + 1))
+
+              if [[ "$imported_header" == */* ]]; then
+                candidate="$(dirname "$bridge")/$imported_header"
+                if [[ ! -f "$candidate" ]]; then
+                  missing_imports+=("$bridge -> $imported_header")
+                fi
+                continue
+              fi
+
+              matches="$(find Sources Buildsystem -type f -name "$imported_header" -print)"
+              match_count="$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')"
+              if [[ "$match_count" -eq 0 ]]; then
+                missing_imports+=("$bridge -> $imported_header")
+              elif [[ "$match_count" -gt 1 ]]; then
+                ambiguous_imports+=("$bridge -> $imported_header: $matches")
+              fi
+            done < <(sed -nE 's/^[[:space:]]*#import[[:space:]]+"([^"]+)".*/\1/p' "$bridge")
+          done < <(find Sources Buildsystem -type f -name '*Bridging-Header.h' -print | sort)
+
+          if (( ${#missing_imports[@]} > 0 || ${#ambiguous_imports[@]} > 0 )); then
+            if (( ${#missing_imports[@]} > 0 )); then
+              printf 'Missing local bridging-header imports after upstream restoration:\n' >&2
+              printf '  %s\n' "${missing_imports[@]}" >&2
             fi
-          done
-
-          if (( ${#missing_files[@]} > 0 )); then
-            printf 'The checkout is still incomplete after upstream restoration. Missing required source file:\n' >&2
-            printf '  %s\n' "${missing_files[@]}" >&2
-            printf 'Verify the pinned upstream revision and network access, then run this workflow again.\n' >&2
+            if (( ${#ambiguous_imports[@]} > 0 )); then
+              printf 'Ambiguous local bridging-header imports:\n' >&2
+              printf '  %s\n' "${ambiguous_imports[@]}" >&2
+            fi
             exit 1
           fi
+
+          printf 'Verified %s local imports across every bridging header.\n' "$checked_imports"
 
       - name: Show build environment
         run: |
@@ -108,7 +128,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY='' \
             DEVELOPMENT_TEAM='' \
-            COMPILER_INDEX_STORE_ENABLE=NO
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            'HEADER_SEARCH_PATHS=$(inherited) $(SRCROOT)/Sources/**'
 
       - name: Package unsigned IPA
         run: |

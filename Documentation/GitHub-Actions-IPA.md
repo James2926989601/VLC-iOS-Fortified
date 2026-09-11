@@ -15,13 +15,32 @@ IPA.
 The artifact contains the IPA and a SHA-256 checksum. GitHub retains it for 14
 days.
 
-## Incomplete fork checkout
+## Reconstructed upstream base
 
 Before installing dependencies, the workflow fetches the pinned VideoLAN
-GitLab upstream revision used as the base for these changes. It restores files that
-are absent from the fork and never overwrites files already present in the
-fork. This prevents partial folder uploads from repeatedly failing on missing
-original VLC headers or implementation files.
+GitLab upstream revision used as the base for these changes. The fork contains
+both missing files and existing files from older VLC revisions, so restoring
+only missing files is not sufficient. The workflow reconstructs every original
+upstream file from the pinned revision while preserving the seven source files
+intentionally customized by the rotating-artwork feature.
+
+The reconstruction is confined to the temporary Actions checkout; it does not
+write changes back to the GitHub repository. It then compares every reconstructed
+upstream file byte-for-byte with the pinned archive and fails early with the full
+list if any mismatch remains. Files that exist only in the mixed-version fork
+are removed from the temporary checkout, so recursive header lookup and build
+scripts cannot accidentally consume stale source files. Git metadata, the
+workflow directory, and this build document are excluded from that cleanup.
+
+The preserved customization list is deliberately explicit:
+
+- `Resources/en.lproj/Localizable.strings`
+- `Sources/App/iOS/VLCAppDelegate.m`
+- `Sources/Headers/VLCConstants.h`
+- `Sources/Playback/Player/AudioPlayer/AudioPlayerView.swift`
+- `Sources/Playback/Player/AudioPlayer/AudioPlayerViewController.swift`
+- `Sources/Playback/Player/VideoPlayer-iOS/MediaMoreOptionsActionSheet.swift`
+- `Sources/Playback/Player/VideoPlayer-iOS/Subviews/MediaPlayerActionSheet.swift`
 
 The workflow then scans every app bridging header and verifies all quoted local
 imports in one pass. Missing and ambiguous imports are reported together before

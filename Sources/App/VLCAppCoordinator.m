@@ -16,7 +16,7 @@
 #import "VLCHTTPUploaderController.h"
 #import "VLCTransferController.h"
 #import "VLCFavoriteService.h"
-#import "VLCRadioCountryService.h"
+#import "VLCRadioService.h"
 #import "VLCSavedServerList.h"
 #import "VLCStripeController.h"
 #import "VLC-Swift.h"
@@ -25,7 +25,7 @@
 {
     MediaLibraryService *_mediaLibraryService;
     VLCFavoriteService *_favoriteService;
-    VLCRadioCountryService *_radioCountryService;
+    VLCRadioService *_radioService;
     VLCSavedServerList *_savedServerList;
     VLCHTTPUploaderController *_httpUploaderController;
     VLCTransferController *_transferController;
@@ -92,13 +92,13 @@
     return _favoriteService;
 }
 
-- (VLCRadioCountryService *)radioCountryService
+- (VLCRadioService *)radioService
 {
-    if (!_radioCountryService) {
-        _radioCountryService = [[VLCRadioCountryService alloc] init];
+    if (!_radioService) {
+        _radioService = [[VLCRadioService alloc] init];
     }
 
-    return _radioCountryService;
+    return _radioService;
 }
 
 - (VLCSavedServerList *)savedServerList
@@ -191,7 +191,15 @@
     _tabCoordinator = [[TabBarCoordinator alloc] initWithTabBarController:_tabBarController mediaLibraryService:self.mediaLibraryService];
 
     _playerDisplayController = [[VLCPlayerDisplayController alloc] init];
+    [_tabBarController addChildViewController:_playerDisplayController];
+    _playerDisplayController.view.translatesAutoresizingMaskIntoConstraints = NO;
     [_tabBarController.view addSubview:_playerDisplayController.view];
+    [NSLayoutConstraint activateConstraints:@[
+        [_playerDisplayController.view.leadingAnchor constraintEqualToAnchor:_tabBarController.view.leadingAnchor],
+        [_playerDisplayController.view.trailingAnchor constraintEqualToAnchor:_tabBarController.view.trailingAnchor],
+        [_playerDisplayController.view.topAnchor constraintEqualToAnchor:_tabBarController.view.topAnchor],
+        [_playerDisplayController.view.bottomAnchor constraintEqualToAnchor:_tabBarController.view.bottomAnchor],
+    ]];
     _playerDisplayController.view.directionalLayoutMargins = NSDirectionalEdgeInsetsMake(0, 0, tabBarController.tabBar.frame.size.height, 0);
     _playerDisplayController.realBottomAnchor = tabBarController.tabBar.topAnchor;
     _playerDisplayController.miniPlayerReferenceTabBar = tabBarController.tabBar;

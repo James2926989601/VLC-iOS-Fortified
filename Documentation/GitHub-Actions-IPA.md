@@ -23,9 +23,17 @@ are absent from the fork and never overwrites files already present in the
 fork. This prevents partial folder uploads from repeatedly failing on missing
 original VLC headers or implementation files.
 
-The workflow then verifies the artwork cacher and radio service source pairs
-explicitly. If this check fails, confirm that the runner can reach the public
-VideoLAN GitLab repository.
+The workflow then scans every app bridging header and verifies all quoted local
+imports in one pass. Missing and ambiguous imports are reported together before
+dependency installation, rather than surfacing one header at a time during the
+build. If this check fails, confirm that the runner can reach the public
+VideoLAN GitLab repository and that the pinned revision still matches the
+project file.
+
+The unsigned build also adds the recursive `Sources/**` header search path while
+preserving inherited target settings. This makes headers restored after checkout
+visible to Swift bridging-header dependency scanning without changing each
+`#import` to a repository-relative special case.
 
 ## Signing
 

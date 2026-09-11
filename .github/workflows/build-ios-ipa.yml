@@ -31,19 +31,112 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Restore files missing from the fork
+      - name: Reconstruct pinned upstream base
         run: |
           set -euo pipefail
 
           upstream_root="$RUNNER_TEMP/vlc-ios-upstream"
           mkdir -p "$upstream_root"
 
+          customized_files=(
+            'Resources/en.lproj/Localizable.strings'
+            'Sources/App/iOS/VLCAppDelegate.m'
+            'Sources/Headers/VLCConstants.h'
+            'Sources/Playback/Player/AudioPlayer/AudioPlayerView.swift'
+            'Sources/Playback/Player/AudioPlayer/AudioPlayerViewController.swift'
+            'Sources/Playback/Player/VideoPlayer-iOS/MediaMoreOptionsActionSheet.swift'
+            'Sources/Playback/Player/VideoPlayer-iOS/Subviews/MediaPlayerActionSheet.swift'
+          )
+
+          is_customized_file() {
+            local candidate="$1"
+            local customized_file
+            for customized_file in "${customized_files[@]}"; do
+              if [[ "$candidate" == "$customized_file" ]]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          missing_customizations=()
+          for customized_file in "${customized_files[@]}"; do
+            if [[ ! -f "$GITHUB_WORKSPACE/$customized_file" ]]; then
+              missing_customizations+=("$customized_file")
+            fi
+          done
+
+          if (( ${#missing_customizations[@]} > 0 )); then
+            printf 'The fork is missing customized source files:\n' >&2
+            printf '  %s\n' "${missing_customizations[@]}" >&2
+            exit 1
+          fi
+
           git remote add vlc-upstream "$VLC_UPSTREAM_REPOSITORY"
           git fetch --no-tags --depth=1 vlc-upstream "$VLC_UPSTREAM_REVISION"
           git archive --format=tar FETCH_HEAD | tar -xf - -C "$upstream_root"
 
-          # Restore only absent upstream files. Never overwrite files from the fork.
-          rsync -a --ignore-existing "$upstream_root/" "$GITHUB_WORKSPACE/"
+          # The fork contains files from several VLC revisions. Rebuild a coherent
+          # source tree from the pinned revision while preserving this feature's
+          # seven intentionally customized source files.
+          # Keep only Actions/Git metadata and this feature's documentation
+          # outside the pinned source tree. Excluded paths are protected from
+          # --delete by rsync unless --delete-excluded is also supplied.
+          rsync_options=(
+            -a
+            --delete
+            '--exclude=/.git/'
+            '--exclude=/.github/'
+            '--exclude=/Documentation/GitHub-Actions-IPA.md'
+          )
+          for customized_file in "${customized_files[@]}"; do
+            rsync_options+=("--exclude=/$customized_file")
+          done
+          rsync "${rsync_options[@]}" "$upstream_root/" "$GITHUB_WORKSPACE/"
+
+          mismatched_upstream_files=()
+          checked_upstream_files=0
+          while IFS= read -r -d '' upstream_file; do
+            relative_path="${upstream_file#"$upstream_root/"}"
+            if is_customized_file "$relative_path"; then
+              continue
+            fi
+
+            checked_upstream_files=$((checked_upstream_files + 1))
+            if [[ ! -f "$GITHUB_WORKSPACE/$relative_path" ]] || \
+               ! cmp -s "$upstream_file" "$GITHUB_WORKSPACE/$relative_path"; then
+              mismatched_upstream_files+=("$relative_path")
+            fi
+          done < <(find "$upstream_root" -type f -print0)
+
+          if (( ${#mismatched_upstream_files[@]} > 0 )); then
+            printf 'Source reconstruction left files inconsistent with the pinned upstream revision:\n' >&2
+            printf '  %s\n' "${mismatched_upstream_files[@]}" >&2
+            exit 1
+          fi
+
+          unexpected_workspace_files=()
+          while IFS= read -r -d '' workspace_file; do
+            relative_path="${workspace_file#"$GITHUB_WORKSPACE/"}"
+            if is_customized_file "$relative_path" || \
+               [[ -f "$upstream_root/$relative_path" ]]; then
+              continue
+            fi
+            unexpected_workspace_files+=("$relative_path")
+          done < <(find "$GITHUB_WORKSPACE" -type f \
+            ! -path "$GITHUB_WORKSPACE/.git/*" \
+            ! -path "$GITHUB_WORKSPACE/.github/*" \
+            ! -path "$GITHUB_WORKSPACE/Documentation/GitHub-Actions-IPA.md" \
+            -print0)
+
+          if (( ${#unexpected_workspace_files[@]} > 0 )); then
+            printf 'Unexpected files remain outside the pinned source tree:\n' >&2
+            printf '  %s\n' "${unexpected_workspace_files[@]}" >&2
+            exit 1
+          fi
+
+          printf 'Verified %s upstream files and preserved %s customized source files.\n' \
+            "$checked_upstream_files" "${#customized_files[@]}"
 
       - name: Verify all bridging-header imports
         run: |

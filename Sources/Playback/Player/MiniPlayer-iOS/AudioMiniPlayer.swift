@@ -99,7 +99,20 @@ class AudioMiniPlayer: UIView, MiniPlayer, QueueViewControllerDelegate {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let hasRoomForExtraControls = bounds.width >= AudioMiniPlayer.extraControlsMinWidth
+        let visibleWidth: CGFloat
+        if let window = window {
+            let frameInWindow = convert(bounds, to: window)
+            visibleWidth = frameInWindow.intersection(window.bounds).width
+        } else {
+            visibleWidth = bounds.width
+        }
+        let capsuleWidth = max(0.0, safeAreaLayoutGuide.layoutFrame.width - 16.0)
+        let visibleCapsuleWidth = max(0.0, visibleWidth - 16.0)
+        let availableWidth = min(capsuleWidth, visibleCapsuleWidth)
+        let isPhonePortrait = UIDevice.current.userInterfaceIdiom == .phone
+            && (window?.bounds.height ?? bounds.height) > (window?.bounds.width ?? bounds.width)
+        let hasRoomForExtraControls = !isPhonePortrait
+            && availableWidth >= AudioMiniPlayer.extraControlsMinWidth
         if repeatButton.isHidden == hasRoomForExtraControls {
             repeatButton.isHidden = !hasRoomForExtraControls
         }

@@ -11,6 +11,13 @@
 
 import UIKit
 
+private final class CircularArtworkImageView: UIImageView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layer.cornerRadius = min(bounds.width, bounds.height) / 2.0
+    }
+}
+
 enum AudioPlayerArtworkDisplayMode: Int, CaseIterable {
     case staticArtwork
     case rotatingDisc
@@ -130,7 +137,7 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
     }()
 
     lazy var rotatingThumbnailImageView: UIImageView = {
-        let imageView = UIImageView()
+        let imageView = CircularArtworkImageView()
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
         return imageView
@@ -321,6 +328,8 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
     private let artworkRotationDuration: CFTimeInterval = 20.0
     private let artworkRotationAnimationKey = "org.videolan.vlc.audio-player.artwork-rotation"
     private var artworkDisplayMode = AudioPlayerArtworkDisplayMode.current
+    private var accumulatedArtworkRotationTime: CFTimeInterval = 0.0
+    private var artworkRotationStartedAt: CFTimeInterval?
 
     private lazy var thumbnailViewCenterYConstraint: NSLayoutConstraint = {
         let constraint = thumbnailView.centerYAnchor.constraint(equalTo: safeAreaLayoutGuide.centerYAnchor)
@@ -410,29 +419,32 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
         thumbnailImageView.clipsToBounds = true
     }
 
-    func updateArtworkPresentation(isPlaying: Bool, resetRotation: Bool = false) {
+    func updateArtworkPresentation(isPlaying: Bool,
+                                   resetRotation: Bool = false,
+                                   forceRotationRefresh: Bool = false) {
         artworkDisplayMode = AudioPlayerArtworkDisplayMode.current
 
         switch artworkDisplayMode {
         case .staticArtwork:
             thumbnailImageView.isHidden = false
             rotatingArtworkContainerView.isHidden = true
-            resetArtworkRotation()
+            resetArtworkRotation(isPlaying: false)
         case .rotatingDisc:
             thumbnailImageView.isHidden = true
             rotatingArtworkContainerView.isHidden = false
-            updateRotatingArtworkCornerRadius()
 
             if resetRotation {
-                resetArtworkRotation()
-            }
-
-            if isPlaying {
-                startOrResumeArtworkRotation()
+                resetArtworkRotation(isPlaying: isPlaying)
+            } else if isPlaying {
+                startOrResumeArtworkRotation(forceRefresh: forceRotationRefresh)
             } else {
                 pauseArtworkRotation()
             }
         }
+    }
+
+    func refreshArtworkRotation(isPlaying: Bool) {
+        updateArtworkPresentation(isPlaying: isPlaying, forceRotationRefresh: true)
     }
 
     var activeArtworkImageView: UIImageView {
@@ -530,7 +542,6 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
         super.layoutSubviews()
         updateContentInsets()
         updateAlbumLabelHeight()
-        updateRotatingArtworkCornerRadius()
     }
 
     private func updateContentInsets() {
@@ -626,56 +637,67 @@ class AudioPlayerView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    private func updateRotatingArtworkCornerRadius() {
-        rotatingThumbnailImageView.layer.cornerRadius = min(rotatingThumbnailImageView.bounds.width,
-                                                             rotatingThumbnailImageView.bounds.height) / 2.0
+    private func currentArtworkRotationTime(at hostTime: CFTimeInterval) -> CFTimeInterval {
+        guard let startedAt = artworkRotationStartedAt else {
+            return accumulatedArtworkRotationTime
+        }
+        return accumulatedArtworkRotationTime + max(0.0, hostTime - startedAt)
     }
 
-    private func startOrResumeArtworkRotation() {
+    private func startOrResumeArtworkRotation(forceRefresh: Bool = false) {
+        let hostTime = CACurrentMediaTime()
+        if artworkRotationStartedAt == nil {
+            artworkRotationStartedAt = hostTime
+        }
+
         let layer = rotatingThumbnailImageView.layer
-        if layer.animation(forKey: artworkRotationAnimationKey) == nil {
-            resetArtworkRotation()
-
-            let animation = CABasicAnimation(keyPath: "transform.rotation.z")
-            animation.fromValue = 0.0
-            animation.toValue = Double.pi * 2.0
-            animation.duration = artworkRotationDuration
-            animation.repeatCount = .infinity
-            animation.timingFunction = CAMediaTimingFunction(name: .linear)
-            layer.add(animation, forKey: artworkRotationAnimationKey)
+        guard forceRefresh || layer.animation(forKey: artworkRotationAnimationKey) == nil else {
             return
         }
 
-        guard layer.speed == 0.0 else {
-            return
-        }
-
-        let pausedTime = layer.timeOffset
-        layer.speed = 1.0
-        layer.timeOffset = 0.0
-        layer.beginTime = 0.0
-        layer.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) - pausedTime
+        renderArtworkRotation(isPlaying: true, at: hostTime)
     }
 
     private func pauseArtworkRotation() {
-        let layer = rotatingThumbnailImageView.layer
-        guard layer.animation(forKey: artworkRotationAnimationKey) != nil,
-              layer.speed != 0.0 else {
-            return
+        let hostTime = CACurrentMediaTime()
+        if let startedAt = artworkRotationStartedAt {
+            accumulatedArtworkRotationTime += max(0.0, hostTime - startedAt)
+            artworkRotationStartedAt = nil
         }
 
-        let pausedTime = layer.convertTime(CACurrentMediaTime(), from: nil)
-        layer.speed = 0.0
-        layer.timeOffset = pausedTime
+        renderArtworkRotation(isPlaying: false, at: hostTime)
     }
 
-    private func resetArtworkRotation() {
+    private func resetArtworkRotation(isPlaying: Bool) {
+        let hostTime = CACurrentMediaTime()
+        accumulatedArtworkRotationTime = 0.0
+        artworkRotationStartedAt = isPlaying ? hostTime : nil
+        renderArtworkRotation(isPlaying: isPlaying, at: hostTime)
+    }
+
+    private func renderArtworkRotation(isPlaying: Bool, at hostTime: CFTimeInterval) {
         let layer = rotatingThumbnailImageView.layer
         layer.removeAnimation(forKey: artworkRotationAnimationKey)
         layer.speed = 1.0
         layer.timeOffset = 0.0
         layer.beginTime = 0.0
-        layer.transform = CATransform3DIdentity
+
+        let elapsed = currentArtworkRotationTime(at: hostTime)
+        let phase = elapsed.truncatingRemainder(dividingBy: artworkRotationDuration) / artworkRotationDuration
+        let angle = phase * Double.pi * 2.0
+        layer.transform = CATransform3DMakeRotation(CGFloat(angle), 0.0, 0.0, 1.0)
+
+        guard isPlaying else {
+            return
+        }
+
+        let animation = CABasicAnimation(keyPath: "transform.rotation.z")
+        animation.fromValue = angle
+        animation.toValue = angle + Double.pi * 2.0
+        animation.duration = artworkRotationDuration
+        animation.repeatCount = .infinity
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+        layer.add(animation, forKey: artworkRotationAnimationKey)
     }
 
     @objc private func playbackDidStart() {

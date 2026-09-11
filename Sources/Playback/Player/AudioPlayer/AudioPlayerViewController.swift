@@ -136,6 +136,7 @@ class AudioPlayerViewController: PlayerViewController {
         let isLandscape = view.bounds.width > view.bounds.height
         audioPlayerView.updateLayout(isLandscape: isLandscape)
         mediaScrubProgressBar.shouldHideScrubLabels = isLandscape
+        audioPlayerView.refreshArtworkRotation(isPlaying: playbackService.isPlaying)
 
         let displayShortcutView: Bool = UserDefaults.standard.bool(forKey: kVLCPlayerShowPlaybackSpeedShortcut)
         audioPlayerView.shouldDisplaySecondaryStackView(displayShortcutView)
@@ -145,6 +146,7 @@ class AudioPlayerViewController: PlayerViewController {
         super.viewDidAppear(animated)
 
         audioPlayerView.resetCornerRadius()
+        audioPlayerView.refreshArtworkRotation(isPlaying: playbackService.isPlaying)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -592,7 +594,7 @@ extension AudioPlayerViewController: PlayerControllerDelegate {
     }
 
     func playerControllerApplicationBecameActive(_ playerController: PlayerController) {
-        // TODO
+        audioPlayerView.refreshArtworkRotation(isPlaying: playbackService.isPlaying)
     }
 }
 

@@ -14,8 +14,10 @@
 
 @interface VLCThumbnailsCache : NSObject
 
+// Preserves source pixel dimensions.
 + (nullable UIImage *)thumbnailForURL:(nullable NSURL *)url;
-+ (nullable UIImage *)minimizedThumbnailForURL:(nullable NSURL *)url;
+// Reserved for non-artwork thumbnails that explicitly permit downsampling.
++ (nullable UIImage *)thumbnailForURL:(nullable NSURL *)url maxPixelSize:(CGFloat)maxPixelSize;
 + (void)invalidateThumbnailForURL:(nullable NSURL *)url;
 
 @end

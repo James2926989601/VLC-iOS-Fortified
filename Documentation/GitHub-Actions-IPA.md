@@ -40,6 +40,7 @@ The preserved customization list is deliberately explicit:
 - `Sources/Headers/VLCConstants.h`
 - `Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.h`
 - `Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.m`
+- `Sources/Media Library/MediaCategories/MediaCategoryViewController.swift`
 - `Sources/Media Library/MediaLibraryModel/MediaModel.swift`
 - `Sources/Media Library/MediaLibraryService.swift`
 - `Sources/Playback/Control/VLCPlaybackService.m`
@@ -56,11 +57,17 @@ The reconstruction step also checks for the original-resolution artwork markers.
 It fails before dependency installation if rsync ever replaces those files with
 the upstream 1024-pixel implementation.
 
-On the first launch after this change, existing audio thumbnails are migrated
-once. VLC removes each legacy media-library thumbnail before requesting a new
-one with `desiredWidth: 0` and `desiredHeight: 0`, which preserves the source
-dimensions. New audio artwork follows the same path, while display-sized
-thumbnail generation remains limited to video media.
+On the first launch after this change, VLC runs one metadata-parser repair pass.
+This restores audio artwork removed by an earlier broken migration without
+deleting media-library data. Audio never enters the frame-thumbnail generator;
+embedded and linked cover art remains owned by metadata parsing. Artwork image
+loading preserves source pixel dimensions on library pages, playback, and Now
+Playing.
+
+The reconstruction guard also preserves the iOS 26 search fix: media pages use
+only the navigation item's integrated `UISearchController`. Album detail pages
+never reattach the legacy standalone `UISearchBar`, preventing the clipped
+search field from appearing over the top-left navigation area.
 
 The workflow then scans every app bridging header and verifies all quoted local
 imports in one pass. Missing and ambiguous imports are reported together before

@@ -194,20 +194,14 @@ class MediaLibraryService: NSObject {
     }
 
     private static let didForceRescan: String = "MediaLibraryDidForceRescan"
-    private static let originalAudioArtworkMigrationKey = "VLCOriginalAudioArtworkMigrationVersion"
-    private static let originalAudioArtworkMigrationVersion = 1
+    private static let audioArtworkParserRepairKey = "VLCAudioArtworkParserRepairVersion"
+    private static let audioArtworkParserRepairVersion = 1
     private var initRecoveryAttempt = 0
 
     private var didStartMediaDiscovery = false
 
     private var desiredThumbnailWidth = UInt(320)
     private var desiredThumbnailHeight = UInt(200)
-
-    private let originalAudioArtworkLock = NSLock()
-    private var originalAudioArtworkRequestedIds = Set<VLCMLIdentifier>()
-    private var originalAudioArtworkCompletedIds = Set<VLCMLIdentifier>()
-    private var originalAudioArtworkMigrationPendingIds = Set<VLCMLIdentifier>()
-    private var originalAudioArtworkMigrationFailed = false
 
     private(set) var observable = VLCObservable<MediaLibraryObserver>()
 
@@ -407,96 +401,24 @@ private extension MediaLibraryService {
 #endif
 
         privateMediaLib.reload()
-        migrateAudioArtworkToOriginalResolutionIfNeeded()
+        repairAudioArtworkIfNeeded()
         privateMediaLib.discover(onEntryPoint: "file://" + path)
     }
 
-    private func migrateAudioArtworkToOriginalResolutionIfNeeded() {
+    private func repairAudioArtworkIfNeeded() {
         let defaults = UserDefaults.standard
-        guard defaults.integer(forKey: MediaLibraryService.originalAudioArtworkMigrationKey)
-                < MediaLibraryService.originalAudioArtworkMigrationVersion else {
+        guard defaults.integer(forKey: MediaLibraryService.audioArtworkParserRepairKey)
+                < MediaLibraryService.audioArtworkParserRepairVersion else {
             return
         }
 
-        let tracks = (privateMediaLib.audioFiles() ?? []).filter {
-            $0.thumbnailStatus() == .available
-        }
-        let trackIds = Set(tracks.map { $0.identifier() })
-
-        originalAudioArtworkLock.lock()
-        originalAudioArtworkMigrationPendingIds = trackIds.subtracting(originalAudioArtworkCompletedIds)
-        originalAudioArtworkMigrationFailed = false
-        let migrationAlreadyComplete = originalAudioArtworkMigrationPendingIds.isEmpty
-        originalAudioArtworkLock.unlock()
-
-        if migrationAlreadyComplete {
-            defaults.set(MediaLibraryService.originalAudioArtworkMigrationVersion,
-                         forKey: MediaLibraryService.originalAudioArtworkMigrationKey)
-            return
-        }
-
-        tracks.forEach { requestOriginalAudioArtwork(for: $0) }
-    }
-
-    private func requestOriginalAudioArtwork(for media: VLCMLMedia) {
-        guard media.type() == .audio else {
-            return
-        }
-
-        let identifier = media.identifier()
-        originalAudioArtworkLock.lock()
-        let isNewRequest = !originalAudioArtworkCompletedIds.contains(identifier)
-            && originalAudioArtworkRequestedIds.insert(identifier).inserted
-        originalAudioArtworkLock.unlock()
-
-        guard isNewRequest else {
-            return
-        }
-
-        if let oldThumbnailURL = media.thumbnail() {
-            VLCThumbnailsCache.invalidateThumbnail(for: oldThumbnailURL)
-        }
-        // requestThumbnail does not guarantee that an already-available media-library
-        // thumbnail is regenerated. Remove the legacy display-sized file first.
-        media.removeThumbnail(of: .thumbnail)
-
-        // MediaLibraryKit documents 0 x 0 as preserving the source dimensions.
-        // Any display-sized request permanently replaces the media thumbnail with
-        // a smaller file, which is then reused by grids, playback and Now Playing.
-        if !media.requestThumbnail(of: .thumbnail,
-                                   desiredWidth: 0,
-                                   desiredHeight: 0,
-                                   atPosition: 0) {
-            finishOriginalAudioArtworkRequest(for: identifier, success: false)
-        }
-    }
-
-    @discardableResult
-    private func finishOriginalAudioArtworkRequest(for identifier: VLCMLIdentifier,
-                                                   success: Bool) -> Bool {
-        originalAudioArtworkLock.lock()
-        guard originalAudioArtworkRequestedIds.remove(identifier) != nil else {
-            originalAudioArtworkLock.unlock()
-            return false
-        }
-
-        if success {
-            originalAudioArtworkCompletedIds.insert(identifier)
-        }
-
-        let wasMigrationRequest = originalAudioArtworkMigrationPendingIds.remove(identifier) != nil
-        if wasMigrationRequest && !success {
-            originalAudioArtworkMigrationFailed = true
-        }
-        let migrationFinished = wasMigrationRequest && originalAudioArtworkMigrationPendingIds.isEmpty
-        let migrationSucceeded = migrationFinished && !originalAudioArtworkMigrationFailed
-        originalAudioArtworkLock.unlock()
-
-        if migrationSucceeded {
-            UserDefaults.standard.set(MediaLibraryService.originalAudioArtworkMigrationVersion,
-                                      forKey: MediaLibraryService.originalAudioArtworkMigrationKey)
-        }
-        return true
+        // A previous build removed parser-created audio artwork and attempted to
+        // recreate it through the video-thumbnail API. Re-run metadata parsers so
+        // embedded and linked cover art is rebuilt without deleting library data.
+        APLog("MediaLibraryService: Re-running metadata parsers to repair audio artwork.")
+        privateMediaLib.forceParserRetry()
+        defaults.set(MediaLibraryService.audioArtworkParserRepairVersion,
+                     forKey: MediaLibraryService.audioArtworkParserRepairKey)
     }
 
     private func setupMediaLibrary() {
@@ -846,21 +768,9 @@ private extension MediaLibraryService {
 
 extension MediaLibraryService {
     @objc func requestThumbnail(for media: VLCMLMedia) {
-        if media.type() == .audio {
-            switch media.thumbnailStatus() {
-            case .missing, .failure:
-                requestOriginalAudioArtwork(for: media)
-            case .available:
-                let migrationVersion = UserDefaults.standard.integer(
-                    forKey: MediaLibraryService.originalAudioArtworkMigrationKey)
-                if migrationVersion < MediaLibraryService.originalAudioArtworkMigrationVersion {
-                    requestOriginalAudioArtwork(for: media)
-                }
-            case .persistentFailure, .crash:
-                break
-            @unknown default:
-                assertionFailure("MediaLibraryService: requestThumbnail: unknown audio case.")
-            }
+        // Audio artwork is created by metadata parsers and must never enter this
+        // frame-thumbnail path. Unknown/video media keep upstream behavior.
+        guard media.type() != .audio else {
             return
         }
 
@@ -999,30 +909,6 @@ extension MediaLibraryService: VLCMediaLibraryDelegate {
 
     func medialibrary(_ medialibrary: VLCMediaLibrary, thumbnailReadyFor media: VLCMLMedia,
                       of type: VLCMLThumbnailSizeType, withSuccess success: Bool) {
-        if type == .thumbnail && media.type() == .audio {
-            if let thumbnailURL = media.thumbnail() {
-                VLCThumbnailsCache.invalidateThumbnail(for: thumbnailURL)
-            }
-            let wasOriginalArtworkRequest = finishOriginalAudioArtworkRequest(for: media.identifier(),
-                                                                                success: success)
-            if success && !wasOriginalArtworkRequest {
-                requestOriginalAudioArtwork(for: media)
-            }
-
-#if !os(tvOS) && !os(watchOS)
-            if success {
-                media.updateCoreSpotlightEntry()
-            }
-#endif
-
-            let playbackService = PlaybackService.sharedInstance()
-            if success && playbackService.currentlyPlayingLibraryMedia?.identifier() == media.identifier() {
-                DispatchQueue.main.async {
-                    playbackService.setNeedsMetadataUpdate()
-                }
-            }
-        }
-
         observable.notifyObservers {
             $0.medialibrary?(self, thumbnailReady: media,
                              type: type, success: success)

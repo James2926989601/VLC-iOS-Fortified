@@ -71,10 +71,8 @@ static uint64_t VLCPixelCountForImage(UIImage *image)
         self.albumName = media.album.title;
         UIImage *artworkImage = [media artworkImage];
         if (media.type == VLCMLMediaTypeAudio) {
-            // The media library thumbnail may still be the legacy display-sized
-            // file while its original-resolution replacement is being generated.
-            // The playing media's parsed metadata exposes the embedded artwork
-            // directly, so prefer it for the player and MPNowPlayingInfoCenter.
+            // Prefer the playing media's embedded artwork while the shared audio
+            // artwork provider parses/caches the same original for every library UI.
             UIImage *embeddedArtwork = mediaPlayer.media.metaData.artwork;
             if (VLCPixelCountForImage(embeddedArtwork) > VLCPixelCountForImage(artworkImage)) {
                 artworkImage = embeddedArtwork;

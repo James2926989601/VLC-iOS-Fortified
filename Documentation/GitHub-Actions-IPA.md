@@ -21,8 +21,8 @@ Before installing dependencies, the workflow fetches the pinned VideoLAN
 GitLab upstream revision used as the base for these changes. The fork contains
 both missing files and existing files from older VLC revisions, so restoring
 only missing files is not sufficient. The workflow reconstructs every original
-upstream file from the pinned revision while preserving the seven source files
-intentionally customized by the rotating-artwork feature.
+upstream file from the pinned revision while preserving every source file
+intentionally customized by the playback and artwork changes.
 
 The reconstruction is confined to the temporary Actions checkout; it does not
 write changes back to the GitHub repository. It then compares every reconstructed
@@ -35,12 +35,32 @@ workflow directory, and this build document are excluded from that cleanup.
 The preserved customization list is deliberately explicit:
 
 - `Resources/en.lproj/Localizable.strings`
+- `Sources/App/VLCAppCoordinator.m`
 - `Sources/App/iOS/VLCAppDelegate.m`
 - `Sources/Headers/VLCConstants.h`
+- `Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.h`
+- `Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.m`
+- `Sources/Media Library/MediaLibraryModel/MediaModel.swift`
+- `Sources/Media Library/MediaLibraryService.swift`
+- `Sources/Playback/Control/VLCPlaybackService.m`
+- `Sources/Playback/OS Integration/VLCMetadata.m`
 - `Sources/Playback/Player/AudioPlayer/AudioPlayerView.swift`
 - `Sources/Playback/Player/AudioPlayer/AudioPlayerViewController.swift`
+- `Sources/Playback/Player/MiniPlayer-iOS/AudioMiniPlayer.swift`
 - `Sources/Playback/Player/VideoPlayer-iOS/MediaMoreOptionsActionSheet.swift`
 - `Sources/Playback/Player/VideoPlayer-iOS/Subviews/MediaPlayerActionSheet.swift`
+- `Sources/Podcasts/Views/PodcastArtworkView.swift`
+- `Sources/WiFi Sharing/VLCHTTPConnection.m`
+
+The reconstruction step also checks for the original-resolution artwork markers.
+It fails before dependency installation if rsync ever replaces those files with
+the upstream 1024-pixel implementation.
+
+On the first launch after this change, existing audio thumbnails are migrated
+once. VLC removes each legacy media-library thumbnail before requesting a new
+one with `desiredWidth: 0` and `desiredHeight: 0`, which preserves the source
+dimensions. New audio artwork follows the same path, while display-sized
+thumbnail generation remains limited to video media.
 
 The workflow then scans every app bridging header and verifies all quoted local
 imports in one pass. Missing and ambiguous imports are reported together before

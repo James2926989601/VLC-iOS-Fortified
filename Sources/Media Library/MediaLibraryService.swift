@@ -132,14 +132,23 @@ extension NSNotification {
                                      didUpdateCacheForSubscriptionWithId subscriptionId: VLCMLIdentifier)
 
     @objc optional func medialibrary(_ medialibrary: MediaLibraryService,
+                                     artworkReadyForSubscriptionWithId subscriptionId: VLCMLIdentifier,
+                                     success: Bool)
+
+    @objc optional func medialibrary(_ medialibrary: MediaLibraryService,
                                      cacheIdleChanged idle: Bool)
 
     @objc optional func medialibrary(_ medialibrary: MediaLibraryService,
-                                     didStartCachingMediaWithId mediaId: VLCMLIdentifier)
+                                     backgroundTasksIdleChanged idle: Bool)
+
+    @objc optional func medialibrary(_ medialibrary: MediaLibraryService,
+                                     didStartCachingMediaWithId mediaId: VLCMLIdentifier,
+                                     operation: VLCMLCacheOperation)
 
     @objc optional func medialibrary(_ medialibrary: MediaLibraryService,
                                      didFinishCachingMediaWithId mediaId: VLCMLIdentifier,
-                                     cached: Bool)
+                                     operation: VLCMLCacheOperation,
+                                     status: VLCMLCacheStatus)
 
     // History
     @objc optional func medialibrary(_ medialibrary: MediaLibraryService,
@@ -185,12 +194,20 @@ class MediaLibraryService: NSObject {
     }
 
     private static let didForceRescan: String = "MediaLibraryDidForceRescan"
+    private static let originalAudioArtworkMigrationKey = "VLCOriginalAudioArtworkMigrationVersion"
+    private static let originalAudioArtworkMigrationVersion = 1
     private var initRecoveryAttempt = 0
 
     private var didStartMediaDiscovery = false
 
     private var desiredThumbnailWidth = UInt(320)
     private var desiredThumbnailHeight = UInt(200)
+
+    private let originalAudioArtworkLock = NSLock()
+    private var originalAudioArtworkRequestedIds = Set<VLCMLIdentifier>()
+    private var originalAudioArtworkCompletedIds = Set<VLCMLIdentifier>()
+    private var originalAudioArtworkMigrationPendingIds = Set<VLCMLIdentifier>()
+    private var originalAudioArtworkMigrationFailed = false
 
     private(set) var observable = VLCObservable<MediaLibraryObserver>()
 
@@ -204,6 +221,7 @@ class MediaLibraryService: NSObject {
 
 #if !os(watchOS)
     private let subscriptionCacher = VLCSubscriptionCacher()
+    private let artworkCacher = VLCArtworkCacher()
 #endif
 
     @objc var medialib: VLCMediaLibrary {
@@ -389,7 +407,96 @@ private extension MediaLibraryService {
 #endif
 
         privateMediaLib.reload()
+        migrateAudioArtworkToOriginalResolutionIfNeeded()
         privateMediaLib.discover(onEntryPoint: "file://" + path)
+    }
+
+    private func migrateAudioArtworkToOriginalResolutionIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.integer(forKey: MediaLibraryService.originalAudioArtworkMigrationKey)
+                < MediaLibraryService.originalAudioArtworkMigrationVersion else {
+            return
+        }
+
+        let tracks = (privateMediaLib.audioFiles() ?? []).filter {
+            $0.thumbnailStatus() == .available
+        }
+        let trackIds = Set(tracks.map { $0.identifier() })
+
+        originalAudioArtworkLock.lock()
+        originalAudioArtworkMigrationPendingIds = trackIds.subtracting(originalAudioArtworkCompletedIds)
+        originalAudioArtworkMigrationFailed = false
+        let migrationAlreadyComplete = originalAudioArtworkMigrationPendingIds.isEmpty
+        originalAudioArtworkLock.unlock()
+
+        if migrationAlreadyComplete {
+            defaults.set(MediaLibraryService.originalAudioArtworkMigrationVersion,
+                         forKey: MediaLibraryService.originalAudioArtworkMigrationKey)
+            return
+        }
+
+        tracks.forEach { requestOriginalAudioArtwork(for: $0) }
+    }
+
+    private func requestOriginalAudioArtwork(for media: VLCMLMedia) {
+        guard media.type() == .audio else {
+            return
+        }
+
+        let identifier = media.identifier()
+        originalAudioArtworkLock.lock()
+        let isNewRequest = !originalAudioArtworkCompletedIds.contains(identifier)
+            && originalAudioArtworkRequestedIds.insert(identifier).inserted
+        originalAudioArtworkLock.unlock()
+
+        guard isNewRequest else {
+            return
+        }
+
+        if let oldThumbnailURL = media.thumbnail() {
+            VLCThumbnailsCache.invalidateThumbnail(for: oldThumbnailURL)
+        }
+        // requestThumbnail does not guarantee that an already-available media-library
+        // thumbnail is regenerated. Remove the legacy display-sized file first.
+        media.removeThumbnail(of: .thumbnail)
+
+        // MediaLibraryKit documents 0 x 0 as preserving the source dimensions.
+        // Any display-sized request permanently replaces the media thumbnail with
+        // a smaller file, which is then reused by grids, playback and Now Playing.
+        if !media.requestThumbnail(of: .thumbnail,
+                                   desiredWidth: 0,
+                                   desiredHeight: 0,
+                                   atPosition: 0) {
+            finishOriginalAudioArtworkRequest(for: identifier, success: false)
+        }
+    }
+
+    @discardableResult
+    private func finishOriginalAudioArtworkRequest(for identifier: VLCMLIdentifier,
+                                                   success: Bool) -> Bool {
+        originalAudioArtworkLock.lock()
+        guard originalAudioArtworkRequestedIds.remove(identifier) != nil else {
+            originalAudioArtworkLock.unlock()
+            return false
+        }
+
+        if success {
+            originalAudioArtworkCompletedIds.insert(identifier)
+        }
+
+        let wasMigrationRequest = originalAudioArtworkMigrationPendingIds.remove(identifier) != nil
+        if wasMigrationRequest && !success {
+            originalAudioArtworkMigrationFailed = true
+        }
+        let migrationFinished = wasMigrationRequest && originalAudioArtworkMigrationPendingIds.isEmpty
+        let migrationSucceeded = migrationFinished && !originalAudioArtworkMigrationFailed
+        originalAudioArtworkLock.unlock()
+
+        if migrationSucceeded {
+            UserDefaults.standard.set(MediaLibraryService.originalAudioArtworkMigrationVersion,
+                                      forKey: MediaLibraryService.originalAudioArtworkMigrationKey)
+        }
+        return true
     }
 
     private func setupMediaLibrary() {
@@ -455,6 +562,7 @@ private extension MediaLibraryService {
         privateMediaLib.delegate = self
 #if !os(watchOS)
         privateMediaLib.cacherDelegate = subscriptionCacher
+        privateMediaLib.artworkCacherDelegate = artworkCacher
 #endif
 
         switch medialibraryStatus {
@@ -550,7 +658,12 @@ private extension MediaLibraryService {
         guard let mrl = mrl else {
             return nil
         }
-        return medialib.media(withMrl: mrl) ?? medialib.addExternalMedia(withMrl: mrl)
+        return medialib.media(withMrl: mrl) ?? addUnknownMedia(with: mrl)
+    }
+
+    private func addUnknownMedia(with mrl: URL) -> VLCMLMedia? {
+        return mrl.isFileURL ? medialib.addExternalMedia(withMrl: mrl)
+                             : medialib.addStream(withMrl: mrl)
     }
 
     @objc func media(for identifier: VLCMLIdentifier) -> VLCMLMedia? {
@@ -601,7 +714,7 @@ private extension MediaLibraryService {
 
         if mlMedia == nil {
             // Add media unknown to the medialibrary.
-            mlMedia = medialib.addExternalMedia(withMrl: mrl)
+            mlMedia = addUnknownMedia(with: mrl)
         }
         saveMetaData(of: mlMedia, from: player)
     }
@@ -732,7 +845,25 @@ private extension MediaLibraryService {
 // MARK: - Video methods
 
 extension MediaLibraryService {
-   @objc func requestThumbnail(for media: VLCMLMedia) {
+    @objc func requestThumbnail(for media: VLCMLMedia) {
+        if media.type() == .audio {
+            switch media.thumbnailStatus() {
+            case .missing, .failure:
+                requestOriginalAudioArtwork(for: media)
+            case .available:
+                let migrationVersion = UserDefaults.standard.integer(
+                    forKey: MediaLibraryService.originalAudioArtworkMigrationKey)
+                if migrationVersion < MediaLibraryService.originalAudioArtworkMigrationVersion {
+                    requestOriginalAudioArtwork(for: media)
+                }
+            case .persistentFailure, .crash:
+                break
+            @unknown default:
+                assertionFailure("MediaLibraryService: requestThumbnail: unknown audio case.")
+            }
+            return
+        }
+
         switch media.thumbnailStatus() {
         case .available, .persistentFailure, .crash:
             return
@@ -868,6 +999,30 @@ extension MediaLibraryService: VLCMediaLibraryDelegate {
 
     func medialibrary(_ medialibrary: VLCMediaLibrary, thumbnailReadyFor media: VLCMLMedia,
                       of type: VLCMLThumbnailSizeType, withSuccess success: Bool) {
+        if type == .thumbnail && media.type() == .audio {
+            if let thumbnailURL = media.thumbnail() {
+                VLCThumbnailsCache.invalidateThumbnail(for: thumbnailURL)
+            }
+            let wasOriginalArtworkRequest = finishOriginalAudioArtworkRequest(for: media.identifier(),
+                                                                                success: success)
+            if success && !wasOriginalArtworkRequest {
+                requestOriginalAudioArtwork(for: media)
+            }
+
+#if !os(tvOS) && !os(watchOS)
+            if success {
+                media.updateCoreSpotlightEntry()
+            }
+#endif
+
+            let playbackService = PlaybackService.sharedInstance()
+            if success && playbackService.currentlyPlayingLibraryMedia?.identifier() == media.identifier() {
+                DispatchQueue.main.async {
+                    playbackService.setNeedsMetadataUpdate()
+                }
+            }
+        }
+
         observable.notifyObservers {
             $0.medialibrary?(self, thumbnailReady: media,
                              type: type, success: success)
@@ -1029,23 +1184,41 @@ extension MediaLibraryService {
         }
     }
 
+    func medialibrary(_ medialibrary: VLCMediaLibrary,
+                      artworkReadyForSubscriptionWithId subscriptionId: VLCMLIdentifier,
+                      withSuccess success: Bool) {
+        observable.notifyObservers {
+            $0.medialibrary?(self, artworkReadyForSubscriptionWithId: subscriptionId, success: success)
+        }
+    }
+
     func medialibrary(_ medialibrary: VLCMediaLibrary, cacheIdleChanged idle: Bool) {
         observable.notifyObservers {
             $0.medialibrary?(self, cacheIdleChanged: idle)
         }
     }
 
-    func medialibrary(_ medialibrary: VLCMediaLibrary,
-                      didStartCachingMediaWithId mediaId: VLCMLIdentifier) {
+    func medialibrary(_ medialibrary: VLCMediaLibrary, didChangeIdleBackgroundTasksWithSuccess success: Bool) {
         observable.notifyObservers {
-            $0.medialibrary?(self, didStartCachingMediaWithId: mediaId)
+            $0.medialibrary?(self, backgroundTasksIdleChanged: success)
         }
     }
 
     func medialibrary(_ medialibrary: VLCMediaLibrary,
-                      didFinishCachingMediaWithId mediaId: VLCMLIdentifier, cached: Bool) {
+                      didStartCachingMediaWithId mediaId: VLCMLIdentifier,
+                      operation: VLCMLCacheOperation) {
         observable.notifyObservers {
-            $0.medialibrary?(self, didFinishCachingMediaWithId: mediaId, cached: cached)
+            $0.medialibrary?(self, didStartCachingMediaWithId: mediaId, operation: operation)
+        }
+    }
+
+    func medialibrary(_ medialibrary: VLCMediaLibrary,
+                      didFinishCachingMediaWithId mediaId: VLCMLIdentifier,
+                      operation: VLCMLCacheOperation,
+                      status: VLCMLCacheStatus) {
+        observable.notifyObservers {
+            $0.medialibrary?(self, didFinishCachingMediaWithId: mediaId, operation: operation,
+                             status: status)
         }
     }
 }

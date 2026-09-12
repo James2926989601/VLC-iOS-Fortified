@@ -154,12 +154,12 @@ extension VLCMLMedia {
         attributeSet.playCount = NSNumber(value: playCount())
         if thumbnailStatus() == .available {
             let image: UIImage?
-            if subtype() == .albumTrack {
+            if type() == .audio {
                 image = artworkImage()
             } else {
                 image = VLCThumbnailsCache.thumbnail(for: thumbnail(), maxPixelSize: 270)
             }
-            let compressionQuality: CGFloat = subtype() == .albumTrack ? 1.0 : 0.9
+            let compressionQuality: CGFloat = type() == .audio ? 1.0 : 0.9
             attributeSet.thumbnailData = image?.jpegData(compressionQuality: compressionQuality)
         }
         attributeSet.codecs = codecs()

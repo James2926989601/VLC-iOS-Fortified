@@ -17,6 +17,15 @@
 
 #import "VLC-Swift.h"
 
+static uint64_t VLCPixelCountForImage(UIImage *image)
+{
+    CGImageRef cgImage = image.CGImage;
+    if (!cgImage) {
+        return 0;
+    }
+    return (uint64_t)CGImageGetWidth(cgImage) * (uint64_t)CGImageGetHeight(cgImage);
+}
+
 @implementation VLCMetaData
 {
     NSURL *_artworkURL;
@@ -60,7 +69,18 @@
         self.albumTrackCount = @(media.album.numberOfTracks);
         self.discNumber = @(media.discNumber);
         self.albumName = media.album.title;
-        [self updateArtworkImage:[media artworkImage]];
+        UIImage *artworkImage = [media artworkImage];
+        if (media.type == VLCMLMediaTypeAudio) {
+            // The media library thumbnail may still be the legacy display-sized
+            // file while its original-resolution replacement is being generated.
+            // The playing media's parsed metadata exposes the embedded artwork
+            // directly, so prefer it for the player and MPNowPlayingInfoCenter.
+            UIImage *embeddedArtwork = mediaPlayer.media.metaData.artwork;
+            if (VLCPixelCountForImage(embeddedArtwork) > VLCPixelCountForImage(artworkImage)) {
+                artworkImage = embeddedArtwork;
+            }
+        }
+        [self updateArtworkImage:artworkImage];
         self.isAudioOnly = ([media subtype] == VLCMLMediaSubtypeAlbumTrack || media.videoTracks.count == 0) ? YES : NO;
         self.identifier = @(media.identifier);
 

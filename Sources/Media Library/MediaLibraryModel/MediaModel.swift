@@ -201,10 +201,12 @@ final class AudioArtworkProvider: NSObject, VLCMediaParserDelegate {
         stateLock.lock()
         defer { stateLock.unlock() }
 
-        let sourceURL = media.url
-        let matchedKey = pendingRequests[sourceURL] != nil
-            ? sourceURL
-            : pendingRequests.first(where: { $0.value.media === media })?.key
+        let matchedKey: URL?
+        if let sourceURL = media.url, pendingRequests[sourceURL] != nil {
+            matchedKey = sourceURL
+        } else {
+            matchedKey = pendingRequests.first(where: { $0.value.media === media })?.key
+        }
         guard let matchedKey = matchedKey,
               let request = pendingRequests.removeValue(forKey: matchedKey) else {
             return nil

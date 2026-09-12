@@ -194,8 +194,6 @@ class MediaLibraryService: NSObject {
     }
 
     private static let didForceRescan: String = "MediaLibraryDidForceRescan"
-    private static let audioArtworkParserRepairKey = "VLCAudioArtworkParserRepairVersion"
-    private static let audioArtworkParserRepairVersion = 1
     private var initRecoveryAttempt = 0
 
     private var didStartMediaDiscovery = false
@@ -401,24 +399,15 @@ private extension MediaLibraryService {
 #endif
 
         privateMediaLib.reload()
-        repairAudioArtworkIfNeeded()
+        prefetchEmbeddedAudioArtwork()
         privateMediaLib.discover(onEntryPoint: "file://" + path)
     }
 
-    private func repairAudioArtworkIfNeeded() {
-        let defaults = UserDefaults.standard
-        guard defaults.integer(forKey: MediaLibraryService.audioArtworkParserRepairKey)
-                < MediaLibraryService.audioArtworkParserRepairVersion else {
-            return
+    private func prefetchEmbeddedAudioArtwork() {
+        let tracks = privateMediaLib.audioFiles() ?? []
+        DispatchQueue.main.async {
+            tracks.forEach { AudioArtworkProvider.shared.requestArtwork(for: $0) }
         }
-
-        // A previous build removed parser-created audio artwork and attempted to
-        // recreate it through the video-thumbnail API. Re-run metadata parsers so
-        // embedded and linked cover art is rebuilt without deleting library data.
-        APLog("MediaLibraryService: Re-running metadata parsers to repair audio artwork.")
-        privateMediaLib.forceParserRetry()
-        defaults.set(MediaLibraryService.audioArtworkParserRepairVersion,
-                     forKey: MediaLibraryService.audioArtworkParserRepairKey)
     }
 
     private func setupMediaLibrary() {
@@ -768,12 +757,6 @@ private extension MediaLibraryService {
 
 extension MediaLibraryService {
     @objc func requestThumbnail(for media: VLCMLMedia) {
-        // Audio artwork is created by metadata parsers and must never enter this
-        // frame-thumbnail path. Unknown/video media keep upstream behavior.
-        guard media.type() != .audio else {
-            return
-        }
-
         switch media.thumbnailStatus() {
         case .available, .persistentFailure, .crash:
             return

@@ -677,6 +677,9 @@ class MediaCategoryViewController: UICollectionViewController, UISearchBarDelega
         notificationCenter.addObserver(self, selector: #selector(preferredContentSizeChanged(_:)),
                                        name: UIContentSizeCategory.didChangeNotification,
                                        object: nil)
+        notificationCenter.addObserver(self, selector: #selector(audioArtworkDidBecomeAvailable(_:)),
+                                       name: .VLCAudioArtworkDidBecomeAvailable,
+                                       object: nil)
 
         if model is MediaGroupViewModel || model is VideoModel {
             notificationCenter.addObserver(self, selector: #selector(handleDisableGrouping),
@@ -712,6 +715,7 @@ class MediaCategoryViewController: UICollectionViewController, UISearchBarDelega
         notificationCenter.removeObserver(self, name: NSNotification.Name(rawValue: VLCPlayerDisplayControllerDisplayMiniPlayer), object: nil)
         notificationCenter.removeObserver(self, name:  NSNotification.Name(rawValue: VLCPlayerDisplayControllerHideMiniPlayer), object: nil)
         notificationCenter.removeObserver(self, name: UIContentSizeCategory.didChangeNotification, object: nil)
+        notificationCenter.removeObserver(self, name: .VLCAudioArtworkDidBecomeAvailable, object: nil)
 
         if model is MediaGroupViewModel || model is VideoModel {
             notificationCenter.removeObserver(self, name: .VLCDisableGroupingDidChangeNotification, object: nil)
@@ -743,6 +747,10 @@ class MediaCategoryViewController: UICollectionViewController, UISearchBarDelega
         }
 
         notificationCenter.removeObserver(self, name: Notification.Name(VLCPlaybackServicePlaybackDidStart), object: nil)
+    }
+
+    @objc private func audioArtworkDidBecomeAvailable(_ notification: Notification) {
+        reloadData()
     }
 
     func loadSort() {

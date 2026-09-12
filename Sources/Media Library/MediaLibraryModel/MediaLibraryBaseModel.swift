@@ -222,9 +222,11 @@ extension MediaCollectionModel {
     func thumbnail() -> UIImage? {
         var image: UIImage? = nil
         if image == nil {
-            for track in files() ?? [] where track.thumbnailStatus() == .available {
-                image = VLCThumbnailsCache.thumbnail(for: track.thumbnail())
-                break
+            for track in files() ?? [] {
+                if let trackArtwork = track.artworkImage() {
+                    image = trackArtwork
+                    break
+                }
             }
         }
         if image == nil

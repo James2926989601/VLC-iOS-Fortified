@@ -178,8 +178,8 @@ extension VLCMLPlaylist {
                 return nil
             }
             for iter in tracks {
-                if iter.thumbnailStatus() == .available {
-                    image = iter.thumbnailImage()
+                if let trackArtwork = iter.artworkImage() {
+                    image = trackArtwork
                     break
                 }
             }

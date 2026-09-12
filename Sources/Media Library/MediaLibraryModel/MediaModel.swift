@@ -9,12 +9,264 @@
  * Refer to the COPYING file of the official project for license.
  *****************************************************************************/
 
+import Foundation
+
 #if !os(watchOS)
 import AppIntents
 import CoreSpotlight
 #endif
 
 protocol MediaModel: NSObject, MLBaseModel where MLType == VLCMLMedia { }
+
+extension Notification.Name {
+    static let VLCAudioArtworkDidBecomeAvailable = Notification.Name("VLCAudioArtworkDidBecomeAvailable")
+}
+
+/// Reads embedded audio artwork independently from the media-library thumbnail.
+/// This recovers stale databases whose artwork file was removed and preserves
+/// source pixels for every consumer.
+final class AudioArtworkProvider: NSObject, VLCMediaParserDelegate {
+    static let shared = AudioArtworkProvider()
+
+    private struct PendingRequest {
+        let media: VLCMedia
+        let sourceURL: URL
+        let cacheURL: URL
+        let libraryIdentifier: VLCMLIdentifier
+    }
+
+    private let stateLock = NSLock()
+    private var pendingRequests = [URL: PendingRequest]()
+    private var pendingSourceURLs = Set<URL>()
+    private var failureCounts = [URL: Int]()
+    private var libraryReloadNotificationScheduled = false
+
+    private lazy var parser: VLCMediaParser = {
+        let parser = VLCMediaParser(library: VLCLibrary.shared(), timeout: -1)
+        parser.delegate = self
+        return parser
+    }()
+
+    private lazy var cacheDirectoryURL: URL? = {
+        guard let cachesURL = FileManager.default.urls(for: .cachesDirectory,
+                                                       in: .userDomainMask).first else {
+            return nil
+        }
+        let directoryURL = cachesURL.appendingPathComponent("OriginalAudioArtwork",
+                                                            isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directoryURL,
+                                                    withIntermediateDirectories: true)
+            return directoryURL
+        } catch {
+            APLog("AudioArtworkProvider: failed to create cache directory: \(error.localizedDescription)")
+            return nil
+        }
+    }()
+
+    private override init() {
+        super.init()
+    }
+
+    func artwork(for media: VLCMLMedia) -> UIImage? {
+        guard let requestInfo = requestInfo(for: media) else {
+            return nil
+        }
+
+        if FileManager.default.fileExists(atPath: requestInfo.cacheURL.path),
+           let image = VLCThumbnailsCache.thumbnail(for: requestInfo.cacheURL) {
+            return image
+        }
+
+        requestArtwork(for: media, requestInfo: requestInfo)
+        return nil
+    }
+
+    func requestArtwork(for media: VLCMLMedia) {
+        guard let requestInfo = requestInfo(for: media),
+              !FileManager.default.fileExists(atPath: requestInfo.cacheURL.path) else {
+            return
+        }
+        requestArtwork(for: media, requestInfo: requestInfo)
+    }
+
+    private func requestInfo(for media: VLCMLMedia) -> (sourceURL: URL, cacheURL: URL)? {
+        guard media.type() == .audio,
+              let file = media.mainFile(),
+              let cacheDirectoryURL = cacheDirectoryURL else {
+            return nil
+        }
+
+        let sourceURL = file.mrl
+        guard sourceURL.isFileURL else {
+            return nil
+        }
+        let fingerprint = "\(sourceURL.absoluteString)|\(file.size())|\(String(describing: file.lastModificationDate))"
+        let fileName = stableCacheFileName(for: fingerprint)
+        return (sourceURL, cacheDirectoryURL.appendingPathComponent(fileName))
+    }
+
+    private func stableCacheFileName(for fingerprint: String) -> String {
+        var firstHash: UInt64 = 14_695_981_039_346_656_037
+        var secondHash: UInt64 = 5_381
+        for byte in fingerprint.utf8 {
+            firstHash ^= UInt64(byte)
+            firstHash &*= 1_099_511_628_211
+            secondHash = ((secondHash << 5) &+ secondHash) ^ UInt64(byte)
+        }
+
+        let first = String(firstHash, radix: 16)
+        let second = String(secondHash, radix: 16)
+        return String(repeating: "0", count: 16 - first.count) + first
+            + String(repeating: "0", count: 16 - second.count) + second
+    }
+
+    private func requestArtwork(for media: VLCMLMedia,
+                                requestInfo: (sourceURL: URL, cacheURL: URL)) {
+        stateLock.lock()
+        let shouldRequest = !pendingSourceURLs.contains(requestInfo.sourceURL)
+            && failureCounts[requestInfo.sourceURL, default: 0] < 3
+        if shouldRequest {
+            pendingSourceURLs.insert(requestInfo.sourceURL)
+        }
+        stateLock.unlock()
+
+        guard shouldRequest else {
+            return
+        }
+        guard let parserMedia = VLCMedia(url: requestInfo.sourceURL) else {
+            stateLock.lock()
+            pendingSourceURLs.remove(requestInfo.sourceURL)
+            failureCounts[requestInfo.sourceURL, default: 0] += 1
+            stateLock.unlock()
+            return
+        }
+
+        let request = PendingRequest(media: parserMedia,
+                                     sourceURL: requestInfo.sourceURL,
+                                     cacheURL: requestInfo.cacheURL,
+                                     libraryIdentifier: media.identifier())
+        stateLock.lock()
+        pendingRequests[requestInfo.sourceURL] = request
+        stateLock.unlock()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let result = self.parser.queue(parserMedia, options: [.parse, .fetchLocal])
+            if result == -1 {
+                self.finishFailedRequest(for: parserMedia)
+            }
+        }
+    }
+
+    func mediaFinishedParsing(_ media: VLCMedia, with status: VLCMediaParsedStatus) {
+        guard let request = takePendingRequest(for: media) else {
+            return
+        }
+
+        guard status == .done,
+              let artworkData = originalArtworkData(from: media) else {
+            APLog("AudioArtworkProvider: local artwork parsing failed for \(request.sourceURL.lastPathComponent), status: \(status.rawValue)")
+            markFailed(request.sourceURL)
+            return
+        }
+
+        do {
+            try artworkData.write(to: request.cacheURL, options: .atomic)
+        } catch {
+            APLog("AudioArtworkProvider: failed to cache artwork for \(request.sourceURL.lastPathComponent): \(error.localizedDescription)")
+            markFailed(request.sourceURL)
+            return
+        }
+
+        stateLock.lock()
+        failureCounts.removeValue(forKey: request.sourceURL)
+        stateLock.unlock()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.scheduleLibraryReloadNotification()
+
+            let playbackService = PlaybackService.sharedInstance()
+            let matchesLibraryMedia = playbackService.currentlyPlayingLibraryMedia?.identifier()
+                == request.libraryIdentifier
+            let matchesPlaybackURL = playbackService.currentlyPlayingMedia?.url == request.sourceURL
+            if matchesLibraryMedia || matchesPlaybackURL {
+                playbackService.setNeedsMetadataUpdate()
+            }
+        }
+    }
+
+    private func takePendingRequest(for media: VLCMedia) -> PendingRequest? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
+        let sourceURL = media.url
+        let matchedKey = pendingRequests[sourceURL] != nil
+            ? sourceURL
+            : pendingRequests.first(where: { $0.value.media === media })?.key
+        guard let matchedKey = matchedKey,
+              let request = pendingRequests.removeValue(forKey: matchedKey) else {
+            return nil
+        }
+        pendingSourceURLs.remove(request.sourceURL)
+        return request
+    }
+
+    private func finishFailedRequest(for media: VLCMedia) {
+        guard let request = takePendingRequest(for: media) else {
+            return
+        }
+        APLog("AudioArtworkProvider: failed to queue local artwork parsing for \(request.sourceURL.lastPathComponent)")
+        markFailed(request.sourceURL)
+    }
+
+    private func originalArtworkData(from media: VLCMedia) -> Data? {
+        let metadata = media.metaData
+        var candidates = [(image: UIImage, data: Data?)]()
+
+        if let artworkURL = metadata.artworkURL,
+           artworkURL.isFileURL,
+           let data = try? Data(contentsOf: artworkURL),
+           let image = UIImage(data: data) {
+            candidates.append((image, data))
+        }
+
+        if let image = metadata.artwork {
+            candidates.append((image, nil))
+        }
+
+        guard let largest = candidates.max(by: { pixelCount(for: $0.image) < pixelCount(for: $1.image) }) else {
+            return nil
+        }
+        return largest.data ?? largest.image.pngData()
+    }
+
+    private func pixelCount(for image: UIImage) -> UInt64 {
+        guard let cgImage = image.cgImage else {
+            return 0
+        }
+        return UInt64(cgImage.width) * UInt64(cgImage.height)
+    }
+
+    private func markFailed(_ sourceURL: URL) {
+        stateLock.lock()
+        failureCounts[sourceURL, default: 0] += 1
+        stateLock.unlock()
+    }
+
+    private func scheduleLibraryReloadNotification() {
+        guard !libraryReloadNotificationScheduled else {
+            return
+        }
+        libraryReloadNotificationScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.libraryReloadNotificationScheduled = false
+            NotificationCenter.default.post(name: .VLCAudioArtworkDidBecomeAvailable,
+                                            object: nil)
+        }
+    }
+}
 
 extension MediaModel {
     func append(_ item: VLCMLMedia) {
@@ -87,6 +339,11 @@ extension VLCMLMedia {
             return nil
         }
 
+        if type() == .audio,
+           let embeddedArtwork = AudioArtworkProvider.shared.artwork(for: self) {
+            return embeddedArtwork
+        }
+
         return VLCThumbnailsCache.thumbnail(for: thumbnail())
     }
 
@@ -152,15 +409,11 @@ extension VLCMLMedia {
         attributeSet.deliveryType = 0
         attributeSet.local = 1
         attributeSet.playCount = NSNumber(value: playCount())
-        if thumbnailStatus() == .available {
-            let image: UIImage?
-            if type() == .audio {
-                image = artworkImage()
-            } else {
-                image = VLCThumbnailsCache.thumbnail(for: thumbnail(), maxPixelSize: 270)
-            }
-            let compressionQuality: CGFloat = type() == .audio ? 1.0 : 0.9
-            attributeSet.thumbnailData = image?.jpegData(compressionQuality: compressionQuality)
+        if type() == .audio {
+            attributeSet.thumbnailData = artworkImage()?.pngData()
+        } else if thumbnailStatus() == .available {
+            let image = VLCThumbnailsCache.thumbnail(for: thumbnail(), maxPixelSize: 270)
+            attributeSet.thumbnailData = image?.jpegData(compressionQuality: 0.9)
         }
         attributeSet.codecs = codecs()
         attributeSet.languages = languages()

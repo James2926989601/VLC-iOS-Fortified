@@ -46,7 +46,9 @@ jobs:
             'Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.h'
             'Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.m'
             'Sources/Media Library/MediaCategories/MediaCategoryViewController.swift'
+            'Sources/Media Library/MediaLibraryModel/MediaLibraryBaseModel.swift'
             'Sources/Media Library/MediaLibraryModel/MediaModel.swift'
+            'Sources/Media Library/MediaLibraryModel/PlaylistModel.swift'
             'Sources/Media Library/MediaLibraryService.swift'
             'Sources/Playback/Control/VLCPlaybackService.m'
             'Sources/Playback/OS Integration/VLCMetadata.m'
@@ -150,9 +152,13 @@ jobs:
           # to let rsync silently restore upstream's 1024-pixel artwork path.
           artwork_guards=(
             'Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.m|VLC_ORIGINAL_PIXEL_SIZE'
-            'Sources/Media Library/MediaLibraryService.swift|audioArtworkParserRepairVersion'
-            'Sources/Media Library/MediaLibraryService.swift|privateMediaLib.forceParserRetry()'
-            'Sources/Media Library/MediaLibraryService.swift|guard media.type() != .audio'
+            'Sources/Media Library/MediaLibraryModel/MediaModel.swift|final class AudioArtworkProvider'
+            'Sources/Media Library/MediaLibraryModel/MediaModel.swift|options: [.parse, .fetchLocal]'
+            'Sources/Media Library/MediaLibraryModel/MediaModel.swift|originalArtworkData(from: media)'
+            'Sources/Media Library/MediaLibraryModel/MediaLibraryBaseModel.swift|track.artworkImage()'
+            'Sources/Media Library/MediaLibraryModel/PlaylistModel.swift|iter.artworkImage()'
+            'Sources/Media Library/MediaLibraryService.swift|prefetchEmbeddedAudioArtwork()'
+            'Sources/Playback/Control/VLCPlaybackService.m|mediaDidChangeArtwork:'
             'Sources/Playback/OS Integration/VLCMetadata.m|embeddedArtwork'
             'Sources/Media Library/MediaCategories/MediaCategoryViewController.swift|Never mount the legacy standalone UISearchBar'
           )
@@ -174,6 +180,7 @@ jobs:
           forbidden_artwork_patterns=(
             'Sources/Media Library/MediaLibraryService.swift|originalAudioArtworkMigrationVersion'
             'Sources/Media Library/MediaLibraryService.swift|requestOriginalAudioArtwork'
+            'Sources/Media Library/MediaLibraryService.swift|forceParserRetry()'
           )
           present_forbidden_patterns=()
           for guard_entry in "${forbidden_artwork_patterns[@]}"; do

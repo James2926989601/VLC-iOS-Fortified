@@ -410,7 +410,7 @@ static NSMutableDictionary *authentifiedHosts;
     UIImage *thumbnail = [media thumbnailImage];
     if (!thumbnail) return [[HTTPErrorResponse alloc] initWithErrorCode:404];
 
-    CGFloat compressionQuality = [media subtype] == VLCMLMediaSubtypeAlbumTrack ? 1.0 : 0.9;
+    CGFloat compressionQuality = media.type == VLCMLMediaTypeAudio ? 1.0 : 0.9;
     NSData *theData = UIImageJPEGRepresentation(thumbnail, compressionQuality);
     if (!theData) return [[HTTPErrorResponse alloc] initWithErrorCode:404];
 

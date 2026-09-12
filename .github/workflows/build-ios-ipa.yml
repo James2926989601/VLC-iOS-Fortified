@@ -40,12 +40,22 @@ jobs:
 
           customized_files=(
             'Resources/en.lproj/Localizable.strings'
+            'Sources/App/VLCAppCoordinator.m'
             'Sources/App/iOS/VLCAppDelegate.m'
             'Sources/Headers/VLCConstants.h'
+            'Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.h'
+            'Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.m'
+            'Sources/Media Library/MediaLibraryModel/MediaModel.swift'
+            'Sources/Media Library/MediaLibraryService.swift'
+            'Sources/Playback/Control/VLCPlaybackService.m'
+            'Sources/Playback/OS Integration/VLCMetadata.m'
             'Sources/Playback/Player/AudioPlayer/AudioPlayerView.swift'
             'Sources/Playback/Player/AudioPlayer/AudioPlayerViewController.swift'
+            'Sources/Playback/Player/MiniPlayer-iOS/AudioMiniPlayer.swift'
             'Sources/Playback/Player/VideoPlayer-iOS/MediaMoreOptionsActionSheet.swift'
             'Sources/Playback/Player/VideoPlayer-iOS/Subviews/MediaPlayerActionSheet.swift'
+            'Sources/Podcasts/Views/PodcastArtworkView.swift'
+            'Sources/WiFi Sharing/VLCHTTPConnection.m'
           )
 
           is_customized_file() {
@@ -78,7 +88,7 @@ jobs:
 
           # The fork contains files from several VLC revisions. Rebuild a coherent
           # source tree from the pinned revision while preserving this feature's
-          # seven intentionally customized source files.
+          # intentionally customized source files.
           # Keep only Actions/Git metadata and this feature's documentation
           # outside the pinned source tree. Excluded paths are protected from
           # --delete by rsync unless --delete-excluded is also supplied.
@@ -132,6 +142,30 @@ jobs:
           if (( ${#unexpected_workspace_files[@]} > 0 )); then
             printf 'Unexpected files remain outside the pinned source tree:\n' >&2
             printf '  %s\n' "${unexpected_workspace_files[@]}" >&2
+            exit 1
+          fi
+
+          # Guard the resolution fix itself. A stale customization manifest used
+          # to let rsync silently restore upstream's 1024-pixel artwork path.
+          artwork_guards=(
+            'Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.m|VLC_ORIGINAL_PIXEL_SIZE'
+            'Sources/Media Library/MediaLibraryService.swift|originalAudioArtworkMigrationVersion'
+            'Sources/Media Library/MediaLibraryService.swift|removeThumbnail(of: .thumbnail)'
+            'Sources/Media Library/MediaLibraryService.swift|desiredWidth: 0'
+            'Sources/Playback/OS Integration/VLCMetadata.m|embeddedArtwork'
+          )
+          missing_artwork_guards=()
+          for guard_entry in "${artwork_guards[@]}"; do
+            guard_file="${guard_entry%%|*}"
+            guard_pattern="${guard_entry#*|}"
+            if ! grep -Fq "$guard_pattern" "$GITHUB_WORKSPACE/$guard_file"; then
+              missing_artwork_guards+=("$guard_file -> $guard_pattern")
+            fi
+          done
+
+          if (( ${#missing_artwork_guards[@]} > 0 )); then
+            printf 'Original-resolution artwork guards were lost during reconstruction:\n' >&2
+            printf '  %s\n' "${missing_artwork_guards[@]}" >&2
             exit 1
           fi
 

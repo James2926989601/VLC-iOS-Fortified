@@ -41,7 +41,9 @@ The preserved customization list is deliberately explicit:
 - `Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.h`
 - `Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.m`
 - `Sources/Media Library/MediaCategories/MediaCategoryViewController.swift`
+- `Sources/Media Library/MediaLibraryModel/MediaLibraryBaseModel.swift`
 - `Sources/Media Library/MediaLibraryModel/MediaModel.swift`
+- `Sources/Media Library/MediaLibraryModel/PlaylistModel.swift`
 - `Sources/Media Library/MediaLibraryService.swift`
 - `Sources/Playback/Control/VLCPlaybackService.m`
 - `Sources/Playback/OS Integration/VLCMetadata.m`
@@ -57,12 +59,14 @@ The reconstruction step also checks for the original-resolution artwork markers.
 It fails before dependency installation if rsync ever replaces those files with
 the upstream 1024-pixel implementation.
 
-On the first launch after this change, VLC runs one metadata-parser repair pass.
-This restores audio artwork removed by an earlier broken migration without
-deleting media-library data. Audio never enters the frame-thumbnail generator;
-embedded and linked cover art remains owned by metadata parsing. Artwork image
-loading preserves source pixel dimensions on library pages, playback, and Now
-Playing.
+VLC no longer depends on a possibly stale media-library thumbnail for audio
+artwork. A dedicated VLCKit parser uses local-artwork fetching to read embedded artwork from every audio file,
+keeps the largest original-pixel result, and stores original encoded bytes when
+available (otherwise lossless PNG) in a separate derived cache. Existing media-library artwork remains an immediate
+fallback while parsing finishes. Successful extraction refreshes all visible
+library categories plus current playback and Now Playing. Playback also observes
+VLCKit's embedded-artwork attachment callback, so late-arriving artwork refreshes
+the player, lock screen, and Dynamic Island. No media or media-library artwork is deleted.
 
 The reconstruction guard also preserves the iOS 26 search fix: media pages use
 only the navigation item's integrated `UISearchController`. Album detail pages

@@ -1771,6 +1771,13 @@ NSString *const VLCLastPlaylistPlayedMedia = @"LastPlaylistPlayedMedia";
     });
 }
 
+- (void)mediaDidChangeArtwork:(VLCMedia *)aMedia
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self setNeedsMetadataUpdateForMedia:aMedia];
+    });
+}
+
 - (void)setNeedsMetadataUpdate
 {
     [self setNeedsMetadataUpdateForMedia:self->_mediaPlayer.media];

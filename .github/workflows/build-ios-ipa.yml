@@ -45,6 +45,7 @@ jobs:
             'Sources/Headers/VLCConstants.h'
             'Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.h'
             'Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.m'
+            'Sources/Media Library/MediaCategories/MediaCategoryViewController.swift'
             'Sources/Media Library/MediaLibraryModel/MediaModel.swift'
             'Sources/Media Library/MediaLibraryService.swift'
             'Sources/Playback/Control/VLCPlaybackService.m'
@@ -149,10 +150,11 @@ jobs:
           # to let rsync silently restore upstream's 1024-pixel artwork path.
           artwork_guards=(
             'Sources/Helpers/Thumbnail Cache/VLCThumbnailsCache.m|VLC_ORIGINAL_PIXEL_SIZE'
-            'Sources/Media Library/MediaLibraryService.swift|originalAudioArtworkMigrationVersion'
-            'Sources/Media Library/MediaLibraryService.swift|removeThumbnail(of: .thumbnail)'
-            'Sources/Media Library/MediaLibraryService.swift|desiredWidth: 0'
+            'Sources/Media Library/MediaLibraryService.swift|audioArtworkParserRepairVersion'
+            'Sources/Media Library/MediaLibraryService.swift|privateMediaLib.forceParserRetry()'
+            'Sources/Media Library/MediaLibraryService.swift|guard media.type() != .audio'
             'Sources/Playback/OS Integration/VLCMetadata.m|embeddedArtwork'
+            'Sources/Media Library/MediaCategories/MediaCategoryViewController.swift|Never mount the legacy standalone UISearchBar'
           )
           missing_artwork_guards=()
           for guard_entry in "${artwork_guards[@]}"; do
@@ -166,6 +168,25 @@ jobs:
           if (( ${#missing_artwork_guards[@]} > 0 )); then
             printf 'Original-resolution artwork guards were lost during reconstruction:\n' >&2
             printf '  %s\n' "${missing_artwork_guards[@]}" >&2
+            exit 1
+          fi
+
+          forbidden_artwork_patterns=(
+            'Sources/Media Library/MediaLibraryService.swift|originalAudioArtworkMigrationVersion'
+            'Sources/Media Library/MediaLibraryService.swift|requestOriginalAudioArtwork'
+          )
+          present_forbidden_patterns=()
+          for guard_entry in "${forbidden_artwork_patterns[@]}"; do
+            guard_file="${guard_entry%%|*}"
+            guard_pattern="${guard_entry#*|}"
+            if grep -Fq "$guard_pattern" "$GITHUB_WORKSPACE/$guard_file"; then
+              present_forbidden_patterns+=("$guard_file -> $guard_pattern")
+            fi
+          done
+
+          if (( ${#present_forbidden_patterns[@]} > 0 )); then
+            printf 'Destructive audio-artwork migration code is still present:\n' >&2
+            printf '  %s\n' "${present_forbidden_patterns[@]}" >&2
             exit 1
           fi
 
